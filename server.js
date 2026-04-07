@@ -48,7 +48,10 @@ try {
   };
 }
 
-res.json(content);
+res.json({
+  success: true,
+  analysis: content
+});
 
   } catch (error) {
     res.status(500).json({ error: "Error en el servidor" });
