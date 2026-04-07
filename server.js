@@ -37,14 +37,18 @@ try {
   content = JSON.parse(content);
 } catch (e) {
   content = {
-    resultado: content
+    score: 80,
+    issues: [
+      {
+        tipo: "error",
+        mensaje: "Respuesta no estructurada correctamente"
+      }
+    ],
+    raw: content
   };
 }
 
-res.json({
-  success: true,
-  data: content
-});
+res.json(content);
 
   } catch (error) {
     res.status(500).json({ error: "Error en el servidor" });
