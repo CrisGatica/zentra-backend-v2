@@ -11,17 +11,23 @@ app.post("/api/chat", async (req, res) => {
     const { messages } = req.body;
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
+  method: "POST",
+  headers: {
+    "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: "Respondé SIEMPRE en JSON válido. Sin texto afuera del JSON."
       },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages,
-        max_tokens: 500
-      })
-    });
+      ...messages
+    ],
+    max_tokens: 500
+  })
+});
 
    const data = await response.json();
 
@@ -30,7 +36,9 @@ let content = data.choices?.[0]?.message?.content || "";
 try {
   content = JSON.parse(content);
 } catch (e) {
-  console.log("No es JSON válido, lo mando como texto");
+  content = {
+    resultado: content
+  };
 }
 
 res.json({
