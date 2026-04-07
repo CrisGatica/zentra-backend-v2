@@ -11,49 +11,34 @@ app.post("/api/chat", async (req, res) => {
     const { messages } = req.body;
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
-  method: "POST",
-  headers: {
-    "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content: "Respondé SIEMPRE en JSON válido. Sin texto afuera del JSON."
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
       },
-      ...messages
-    ],
-    max_tokens: 500
-  })
-});
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "Respondé de forma clara, profesional y estructurada. No uses JSON."
+          },
+          ...messages
+        ],
+        max_tokens: 500
+      })
+    });
 
-   const data = await response.json();
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "";
 
-let content = data.choices?.[0]?.message?.content || "";
-
-try {
-  content = JSON.parse(content);
-} catch (e) {
-  content = {
-    score: 80,
-    issues: [
-      {
-        tipo: "error",
-        mensaje: "Respuesta no estructurada correctamente"
-      }
-    ],
-    raw: content
-  };
-}
-
-res.json({
-  success: true,
-  analysis: content
-});
+    res.json({
+      success: true,
+      data: content
+    });
 
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: "Error en el servidor" });
   }
 });
