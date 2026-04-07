@@ -17,24 +17,24 @@ app.post("/api/chat", async (req, res) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: "Respondé de forma clara, profesional y estructurada. No uses JSON."
-          },
-          ...messages
-        ],
-        max_tokens: 500
-      })
-    });
+  model: "gpt-4o-mini",
+  response_format: { type: "json_object" },
+  messages: [
+    {
+      role: "system",
+      content: "Respondé SOLO en JSON válido. Sin texto extra."
+    },
+    ...messages
+  ],
+  max_tokens: 500
+})
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
+    const content = data.choices?.[0]?.message?.content || "{}";
 
     res.json({
       success: true,
-      data: content
+      analysis: JSON.parse(content)
     });
 
   } catch (error) {
