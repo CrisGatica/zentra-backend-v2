@@ -27,14 +27,24 @@ app.post("/api/chat", async (req, res) => {
     ...messages
   ],
   max_tokens: 500
-})
+  })
+});
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "{}";
+
+const content = data.choices?.[0]?.message?.content ?? "{}";
+
+let parsed;
+
+try {
+  parsed = JSON.parse(content);
+} catch {
+  parsed = {};
+}
 
     res.json({
       success: true,
-      analysis: JSON.parse(content)
+      analysis: parsed
     });
 
   } catch (error) {
