@@ -34,7 +34,7 @@ app.post("/api/chat", async (req, res) => {
   ],
   max_tokens: 500
 })
-
+}); //
     const data = await response.json();
 
     const content = data.choices?.[0]?.message?.content ?? "{}";
