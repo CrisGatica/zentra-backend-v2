@@ -12,17 +12,22 @@ app.post("/api/chat", async (req, res) => {
   try {
     const { messages } = req.body;
 
-    // ✅ LIMPIAR HISTORIAL (CLAVE)
-    const cleanMessages = messages.map((msg) => {
+    // Conservar solo la imagen del ultimo mensaje; las anteriores se reemplazan.
+    const cleanMessages = messages.map((msg, index) => {
+      const isLastMessage = index === messages.length - 1;
+
       if (Array.isArray(msg.content)) {
         return {
           ...msg,
           content: msg.content.map((item) => {
-            // ❌ eliminar imágenes viejas
             if (item.type === "image_url") {
+              if (isLastMessage) {
+                return item;
+              }
+
               return {
                 type: "text",
-                text: "[imagen omitida]"
+                text: "[imagen omitida del historial]"
               };
             }
             return item;
