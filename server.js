@@ -10,7 +10,13 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 app.post("/api/chat", async (req, res) => {
   try {
-    const { messages } = req.body;
+    const {
+      messages = [],
+      model = "gpt-4o-mini",
+      max_tokens = 500,
+      temperature = 0.7,
+      response_format
+    } = req.body;
 
     // Conservar solo la imagen del ultimo mensaje; las anteriores se reemplazan.
     const cleanMessages = messages.map((msg, index) => {
@@ -44,8 +50,9 @@ app.post("/api/chat", async (req, res) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
-        response_format: { type: "json_object" },
+        model,
+        response_format: response_format || { type: "json_object" },
+        temperature,
         messages: [
           {
             role: "system",
@@ -58,11 +65,18 @@ app.post("/api/chat", async (req, res) => {
           },
           ...cleanMessages
         ],
-        max_tokens: 500
+        max_tokens
       })
     });
 
     const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: data?.error?.message || "Error en OpenAI",
+        raw: data
+      });
+    }
 
     const content = data.choices?.[0]?.message?.content ?? "{}";
 
@@ -70,12 +84,25 @@ app.post("/api/chat", async (req, res) => {
     try {
       parsed = JSON.parse(content);
     } catch {
-      parsed = {};
+      const match = String(content).match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          parsed = JSON.parse(match[0]);
+        } catch {
+          parsed = {};
+        }
+      } else {
+        parsed = {};
+      }
     }
 
     res.json({
       success: true,
-      analysis: parsed
+      analysis: parsed,
+      raw_content: content,
+      usage: data.usage,
+      model: data.model,
+      id: data.id
     });
 
   } catch (error) {
