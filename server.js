@@ -17,19 +17,23 @@ app.post("/api/chat", async (req, res) => {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: "Respondé SOLO en JSON válido. Sin texto extra."
-          },
-          ...messages
-        ],
-        max_tokens: 500
-      })
-    });
+     body: JSON.stringify({
+  model: "gpt-4o-mini",
+  response_format: { type: "json_object" },
+  messages: [
+    {
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: "Respondé SOLO en JSON válido. Sin texto extra."
+        }
+      ]
+    },
+    ...messages
+  ],
+  max_tokens: 500
+})
 
     const data = await response.json();
 
