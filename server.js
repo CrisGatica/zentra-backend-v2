@@ -8,6 +8,35 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+function parseJsonSafely(content) {
+  if (!content) return {};
+
+  const attempts = [];
+  const raw = String(content).trim();
+  attempts.push(raw);
+
+  const withoutFences = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+  attempts.push(withoutFences);
+
+  const objectMatch = withoutFences.match(/\{[\s\S]*\}/);
+  if (objectMatch) {
+    attempts.push(objectMatch[0]);
+    attempts.push(
+      objectMatch[0]
+        .replace(/,\s*}/g, "}")
+        .replace(/,\s*]/g, "]")
+    );
+  }
+
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate);
+    } catch (_) {}
+  }
+
+  return {};
+}
+
 app.post("/api/chat", async (req, res) => {
   try {
     const {
@@ -79,22 +108,7 @@ app.post("/api/chat", async (req, res) => {
     }
 
     const content = data.choices?.[0]?.message?.content ?? "{}";
-
-    let parsed;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      const match = String(content).match(/\{[\s\S]*\}/);
-      if (match) {
-        try {
-          parsed = JSON.parse(match[0]);
-        } catch {
-          parsed = {};
-        }
-      } else {
-        parsed = {};
-      }
-    }
+    const parsed = parseJsonSafely(content);
 
     res.json({
       success: true,
