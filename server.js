@@ -34,6 +34,20 @@ const SUPPORTED_LEMON_EVENTS = new Set([
   "order_created"
 ]);
 
+const PLAN_LIMITS = {
+  free: { actions: 20, audits: 1 },
+  starter: { actions: 200, audits: 3 },
+  pro: { actions: 800, audits: 10 },
+  agency: { actions: 2000, audits: 20 }
+};
+
+const PREMIUM_LIMITS = {
+  free: { premium_chat_used: 0, premium_pdf_used: 0 },
+  starter: { premium_chat_used: 0, premium_pdf_used: 0 },
+  pro: { premium_chat_used: 80, premium_pdf_used: 30 },
+  agency: { premium_chat_used: 300, premium_pdf_used: 80 }
+};
+
 const LEMON_PRODUCT_MAP = {
   // Zentra AI SaaS - suscripciones mensuales y anuales
   "990970": { plan: "starter", plan_type: "subscription" },
@@ -74,6 +88,36 @@ function getSupabaseClient() {
 
 function normalizeEmail(email = "") {
   return String(email || "").trim().toLowerCase();
+}
+
+function normalizePlan(plan = "free") {
+  const normalizedPlan = String(plan || "free").toLowerCase();
+  return PLAN_LIMITS[normalizedPlan] ? normalizedPlan : "free";
+}
+
+function normalizeCounterValue(value = 0) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue >= 0 ? Math.floor(numberValue) : 0;
+}
+
+function getPlanLimits(plan = "free") {
+  return PLAN_LIMITS[normalizePlan(plan)] || PLAN_LIMITS.free;
+}
+
+function getPremiumLimits(plan = "free") {
+  return PREMIUM_LIMITS[normalizePlan(plan)] || PREMIUM_LIMITS.free;
+}
+
+function getNextBillingCycleStart(timestamp = Date.now()) {
+  const date = new Date(Number(timestamp) || Date.now());
+  const nextDate = new Date(date);
+  nextDate.setMonth(nextDate.getMonth() + 1);
+  return nextDate.getTime();
+}
+
+function shouldResetMonthlyUsage(user = {}) {
+  const billingCycleStart = normalizeCounterValue(user.billing_cycle_start || Date.now());
+  return Date.now() >= getNextBillingCycleStart(billingCycleStart);
 }
 
 function normalizePlanFromProductName(productName = "") {
@@ -231,11 +275,16 @@ async function upsertUserAccess(userData = {}) {
   const client = getSupabaseClient();
   const payload = {
     email: userData.email,
-    plan: userData.plan,
+    plan: normalizePlan(userData.plan),
     plan_type: userData.plan_type,
     status: userData.status,
-    audit_credits: Number.isFinite(Number(userData.audit_credits)) ? Number(userData.audit_credits) : 0,
-    audit_credits_used: Number.isFinite(Number(userData.audit_credits_used)) ? Number(userData.audit_credits_used) : 0,
+    audit_credits: normalizeCounterValue(userData.audit_credits),
+    audit_credits_used: normalizeCounterValue(userData.audit_credits_used),
+    actions_used: normalizeCounterValue(userData.actions_used),
+    audits_used: normalizeCounterValue(userData.audits_used),
+    premium_chat_used: normalizeCounterValue(userData.premium_chat_used),
+    premium_pdf_used: normalizeCounterValue(userData.premium_pdf_used),
+    billing_cycle_start: normalizeCounterValue(userData.billing_cycle_start || Date.now()),
     updated_at: new Date().toISOString()
   };
 
@@ -244,7 +293,7 @@ async function upsertUserAccess(userData = {}) {
     .upsert(payload, {
       onConflict: "email,plan_type"
     })
-    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, updated_at")
+    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, billing_cycle_start, updated_at")
     .single();
 
   if (error) {
@@ -258,7 +307,7 @@ async function getUserByEmail(email, planType = "subscription") {
   const client = getSupabaseClient();
   const { data, error } = await client
     .from("users")
-    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, updated_at")
+    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, billing_cycle_start, updated_at")
     .eq("email", email)
     .eq("plan_type", planType)
     .maybeSingle();
@@ -268,6 +317,128 @@ async function getUserByEmail(email, planType = "subscription") {
   }
 
   return data;
+}
+
+function getDefaultSubscriptionUser(email = "") {
+  return {
+    email,
+    plan: "free",
+    plan_type: "subscription",
+    status: "active",
+    audit_credits: 0,
+    audit_credits_used: 0,
+    actions_used: 0,
+    audits_used: 0,
+    premium_chat_used: 0,
+    premium_pdf_used: 0,
+    billing_cycle_start: Date.now()
+  };
+}
+
+function formatSubscriptionUsage(user = {}) {
+  const plan = normalizePlan(user.plan);
+  const limits = getPlanLimits(plan);
+  const premiumLimits = getPremiumLimits(plan);
+  const actionsUsed = normalizeCounterValue(user.actions_used);
+  const auditsUsed = normalizeCounterValue(user.audits_used);
+  const premiumChatUsed = normalizeCounterValue(user.premium_chat_used);
+  const premiumPdfUsed = normalizeCounterValue(user.premium_pdf_used);
+
+  return {
+    plan,
+    plan_type: "subscription",
+    status: user.status || "active",
+    actions_used: actionsUsed,
+    actions_limit: limits.actions,
+    actions_remaining: Math.max(limits.actions - actionsUsed, 0),
+    audits_used: auditsUsed,
+    audits_limit: limits.audits,
+    audits_remaining: Math.max(limits.audits - auditsUsed, 0),
+    premium_chat_used: premiumChatUsed,
+    premium_chat_limit: premiumLimits.premium_chat_used,
+    premium_chat_remaining: Math.max(premiumLimits.premium_chat_used - premiumChatUsed, 0),
+    premium_pdf_used: premiumPdfUsed,
+    premium_pdf_limit: premiumLimits.premium_pdf_used,
+    premium_pdf_remaining: Math.max(premiumLimits.premium_pdf_used - premiumPdfUsed, 0),
+    billing_cycle_start: normalizeCounterValue(user.billing_cycle_start || Date.now())
+  };
+}
+
+async function ensureFreshSubscriptionUsage(email) {
+  const existingUser = await getUserByEmail(email, "subscription");
+  const user = existingUser || getDefaultSubscriptionUser(email);
+
+  if (user.status === "cancelled") {
+    return {
+      ...getDefaultSubscriptionUser(email),
+      status: "cancelled"
+    };
+  }
+
+  if (!existingUser || shouldResetMonthlyUsage(user)) {
+    return upsertUserAccess({
+      ...user,
+      plan: user.plan || "free",
+      plan_type: "subscription",
+      status: user.status || "active",
+      actions_used: 0,
+      audits_used: 0,
+      premium_chat_used: 0,
+      premium_pdf_used: 0,
+      billing_cycle_start: Date.now()
+    });
+  }
+
+  return user;
+}
+
+async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
+  const allowedCounters = new Set(["actions_used", "audits_used", "premium_chat_used", "premium_pdf_used"]);
+  if (!allowedCounters.has(counterKey)) {
+    return {
+      allowed: false,
+      reason: "invalid_counter"
+    };
+  }
+
+  const user = await ensureFreshSubscriptionUsage(email);
+  if (!user || user.status !== "active") {
+    return {
+      allowed: false,
+      reason: "no_active_subscription",
+      user
+    };
+  }
+
+  const usage = formatSubscriptionUsage(user);
+  const limitMap = {
+    actions_used: usage.actions_limit,
+    audits_used: usage.audits_limit,
+    premium_chat_used: usage.premium_chat_limit,
+    premium_pdf_used: usage.premium_pdf_limit
+  };
+  const currentUsed = normalizeCounterValue(user[counterKey]);
+  const limit = normalizeCounterValue(limitMap[counterKey]);
+
+  if (currentUsed >= limit) {
+    return {
+      allowed: false,
+      reason: "usage_limit_reached",
+      user
+    };
+  }
+
+  const savedUser = await upsertUserAccess({
+    ...user,
+    [counterKey]: currentUsed + 1,
+    plan_type: "subscription",
+    status: "active"
+  });
+
+  return {
+    allowed: true,
+    user: savedUser
+  };
 }
 
 async function grantAuditAccess(paymentInfo = {}) {
@@ -425,7 +596,12 @@ app.post("/api/lemon/webhook", async (req, res) => {
       plan_type: "subscription",
       status: paymentInfo.status,
       audit_credits: Number(existingUser?.audit_credits || 0),
-      audit_credits_used: Number(existingUser?.audit_credits_used || 0)
+      audit_credits_used: Number(existingUser?.audit_credits_used || 0),
+      actions_used: Number(existingUser?.actions_used || 0),
+      audits_used: Number(existingUser?.audits_used || 0),
+      premium_chat_used: Number(existingUser?.premium_chat_used || 0),
+      premium_pdf_used: Number(existingUser?.premium_pdf_used || 0),
+      billing_cycle_start: Number(existingUser?.billing_cycle_start || Date.now())
     });
 
     console.log("[lemon:webhook] Suscripcion SaaS sincronizada", {
@@ -459,17 +635,42 @@ app.get("/api/user", async (req, res) => {
       return res.status(400).json({ error: "email es requerido" });
     }
 
-    const user = await getUserByEmail(email, planType);
+    const user = planType === "subscription"
+      ? await ensureFreshSubscriptionUsage(email)
+      : await getUserByEmail(email, planType);
 
     if (!user || user.status === "cancelled") {
       return res.json({
         plan: "free",
         plan_type: planType,
         status: user?.status || "active",
+        actions_used: 0,
+        actions_limit: PLAN_LIMITS.free.actions,
+        actions_remaining: PLAN_LIMITS.free.actions,
+        audits_used: 0,
+        audits_limit: PLAN_LIMITS.free.audits,
+        audits_remaining: PLAN_LIMITS.free.audits,
+        premium_chat_used: 0,
+        premium_chat_limit: 0,
+        premium_chat_remaining: 0,
+        premium_pdf_used: 0,
+        premium_pdf_limit: 0,
+        premium_pdf_remaining: 0,
+        billing_cycle_start: Date.now(),
         audit_credits: 0,
         audit_credits_used: 0,
         audit_credits_remaining: 0,
         found: Boolean(user)
+      });
+    }
+
+    if (planType === "subscription") {
+      return res.json({
+        ...formatSubscriptionUsage(user),
+        audit_credits: 0,
+        audit_credits_used: 0,
+        audit_credits_remaining: 0,
+        found: true
       });
     }
 
@@ -488,6 +689,64 @@ app.get("/api/user", async (req, res) => {
   } catch (error) {
     console.error("[api:user] Error consultando usuario:", error);
     return res.status(500).json({ error: "Error consultando usuario" });
+  }
+});
+
+app.get("/api/subscription/usage", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.query.email);
+
+    if (!email) {
+      return res.status(400).json({ error: "email es requerido" });
+    }
+
+    const user = await ensureFreshSubscriptionUsage(email);
+
+    if (!user || user.status === "cancelled") {
+      return res.json({
+        ...formatSubscriptionUsage(getDefaultSubscriptionUser(email)),
+        status: user?.status || "active",
+        found: Boolean(user)
+      });
+    }
+
+    return res.json({
+      ...formatSubscriptionUsage(user),
+      found: true
+    });
+  } catch (error) {
+    console.error("[api:subscription:usage] Error consultando consumo:", error);
+    return res.status(500).json({ error: "Error consultando consumo de suscripcion" });
+  }
+});
+
+app.post("/api/subscription/consume", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const counterKey = String(req.body?.counter || "actions_used").trim();
+
+    if (!email) {
+      return res.status(400).json({ error: "email es requerido" });
+    }
+
+    const result = await consumeSubscriptionUsage(email, counterKey);
+
+    if (!result.allowed) {
+      const fallbackUser = result.user || await ensureFreshSubscriptionUsage(email);
+      return res.status(403).json({
+        allowed: false,
+        reason: result.reason,
+        ...formatSubscriptionUsage(fallbackUser || getDefaultSubscriptionUser(email))
+      });
+    }
+
+    return res.json({
+      allowed: true,
+      ...formatSubscriptionUsage(result.user)
+    });
+  } catch (error) {
+    console.error("[api:subscription:consume] Error consumiendo uso:", error);
+    return res.status(500).json({ error: "Error consumiendo uso de suscripcion" });
   }
 });
 

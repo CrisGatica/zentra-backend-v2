@@ -6,6 +6,11 @@ create table if not exists public.users (
   status text not null default 'active' check (status in ('active', 'cancelled')),
   audit_credits integer not null default 0,
   audit_credits_used integer not null default 0,
+  actions_used integer not null default 0,
+  audits_used integer not null default 0,
+  premium_chat_used integer not null default 0,
+  premium_pdf_used integer not null default 0,
+  billing_cycle_start bigint not null default (floor(extract(epoch from now()) * 1000))::bigint,
   updated_at timestamptz not null default now()
 );
 
@@ -14,7 +19,12 @@ create unique index if not exists users_email_plan_type_key on public.users (ema
 
 alter table public.users
   add column if not exists audit_credits integer not null default 0,
-  add column if not exists audit_credits_used integer not null default 0;
+  add column if not exists audit_credits_used integer not null default 0,
+  add column if not exists actions_used integer not null default 0,
+  add column if not exists audits_used integer not null default 0,
+  add column if not exists premium_chat_used integer not null default 0,
+  add column if not exists premium_pdf_used integer not null default 0,
+  add column if not exists billing_cycle_start bigint not null default (floor(extract(epoch from now()) * 1000))::bigint;
 
 do $$
 begin
