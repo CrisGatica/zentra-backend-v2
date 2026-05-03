@@ -9,6 +9,9 @@ const PORT = process.env.PORT || 3000;
 const LEMON_WEBHOOK_SECRET = process.env.LEMON_SQUEEZY_WEBHOOK_SECRET || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const ZENTRA_BASE_MODEL = process.env.ZENTRA_BASE_MODEL || "gpt-4o-mini";
+const ZENTRA_PREMIUM_MODEL = process.env.ZENTRA_PREMIUM_MODEL || ZENTRA_BASE_MODEL;
+const ZENTRA_PREMIUM_FINAL_MODEL = process.env.ZENTRA_PREMIUM_FINAL_MODEL || ZENTRA_PREMIUM_MODEL;
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: {
@@ -46,6 +49,48 @@ const PREMIUM_LIMITS = {
   starter: { premium_chat_used: 0, premium_pdf_used: 0 },
   pro: { premium_chat_used: 80, premium_pdf_used: 30 },
   agency: { premium_chat_used: 300, premium_pdf_used: 80 }
+};
+
+const AI_TASK_ROUTING = {
+  chat_basic: {
+    model: ZENTRA_BASE_MODEL,
+    premium: false,
+    maxTokens: 4096
+  },
+  chat_image_ocr: {
+    model: ZENTRA_BASE_MODEL,
+    premium: false,
+    maxTokens: 4096
+  },
+  chat_premium: {
+    model: ZENTRA_PREMIUM_MODEL,
+    fallbackModel: ZENTRA_BASE_MODEL,
+    premium: true,
+    counterKey: "premium_chat_used",
+    allowedPlans: ["pro", "agency"],
+    maxTokens: 4096
+  },
+  seo_analysis: {
+    model: ZENTRA_BASE_MODEL,
+    premium: false,
+    maxTokens: 2048
+  },
+  pdf_summary: {
+    model: ZENTRA_PREMIUM_MODEL,
+    fallbackModel: ZENTRA_BASE_MODEL,
+    premium: true,
+    counterKey: "premium_pdf_used",
+    allowedPlans: ["pro", "agency"],
+    maxTokens: 2200
+  },
+  pdf_polish: {
+    model: ZENTRA_PREMIUM_FINAL_MODEL,
+    fallbackModel: ZENTRA_BASE_MODEL,
+    premium: true,
+    counterKey: "premium_pdf_used",
+    allowedPlans: ["agency"],
+    maxTokens: 3072
+  }
 };
 
 const LEMON_PRODUCT_MAP = {
@@ -106,6 +151,106 @@ function getPlanLimits(plan = "free") {
 
 function getPremiumLimits(plan = "free") {
   return PREMIUM_LIMITS[normalizePlan(plan)] || PREMIUM_LIMITS.free;
+}
+
+function normalizeTaskType(taskType = "chat_basic") {
+  const normalizedTaskType = String(taskType || "chat_basic").trim().toLowerCase();
+  return AI_TASK_ROUTING[normalizedTaskType] ? normalizedTaskType : "chat_basic";
+}
+
+function clampMaxTokens(requestedMaxTokens, taskType = "chat_basic") {
+  const route = AI_TASK_ROUTING[normalizeTaskType(taskType)] || AI_TASK_ROUTING.chat_basic;
+  const requested = normalizeCounterValue(requestedMaxTokens || route.maxTokens || 500);
+  const routeLimit = normalizeCounterValue(route.maxTokens || 4096);
+  const hardLimit = 4096;
+  return Math.min(Math.max(requested || 500, 128), routeLimit, hardLimit);
+}
+
+function normalizeTemperature(value = 0.7) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return 0.7;
+  return Math.min(Math.max(numberValue, 0), 1);
+}
+
+function getEmailFromChatRequest(req, routing = {}) {
+  return normalizeEmail(
+    req.body?.zentra_user_email ||
+    req.body?.user_email ||
+    routing.email ||
+    routing.userEmail ||
+    ""
+  );
+}
+
+async function resolveAiRoutingForRequest(req) {
+  const routing = req.body?.zentra_routing || {};
+  const taskType = normalizeTaskType(routing.taskType || req.body?.task_type || "chat_basic");
+  const route = AI_TASK_ROUTING[taskType] || AI_TASK_ROUTING.chat_basic;
+  const maxTokens = clampMaxTokens(req.body?.max_tokens || routing.maxTokens, taskType);
+  const email = getEmailFromChatRequest(req, routing);
+
+  const resolved = {
+    taskType,
+    email,
+    requestedModel: req.body?.model || routing.selectedModel || "",
+    model: ZENTRA_BASE_MODEL,
+    fallbackModel: route.fallbackModel || ZENTRA_BASE_MODEL,
+    maxTokens,
+    premiumRequested: Boolean(routing.premiumActive || routing.premiumAllowed || route.premium),
+    premiumActive: false,
+    premiumConsumed: false,
+    counterKey: route.counterKey || null,
+    reason: "base_model"
+  };
+
+  if (!route.premium) {
+    return resolved;
+  }
+
+  if (!email) {
+    return {
+      ...resolved,
+      reason: "missing_user_email"
+    };
+  }
+
+  const premiumModel = route.model || ZENTRA_BASE_MODEL;
+  if (!premiumModel || premiumModel === ZENTRA_BASE_MODEL) {
+    return {
+      ...resolved,
+      reason: "premium_model_not_configured"
+    };
+  }
+
+  const user = await ensureFreshSubscriptionUsage(email);
+  const plan = normalizePlan(user?.plan);
+  const allowedPlans = route.allowedPlans || [];
+
+  if (!user || user.status !== "active" || !allowedPlans.includes(plan)) {
+    return {
+      ...resolved,
+      plan,
+      reason: "premium_not_allowed_for_plan"
+    };
+  }
+
+  const premiumUsage = await consumeSubscriptionUsage(email, route.counterKey);
+  if (!premiumUsage.allowed) {
+    return {
+      ...resolved,
+      plan,
+      reason: premiumUsage.reason || "premium_limit_reached"
+    };
+  }
+
+  return {
+    ...resolved,
+    plan,
+    model: premiumModel,
+    premiumActive: true,
+    premiumConsumed: true,
+    reason: "premium_authorized"
+  };
 }
 
 function getNextBillingCycleStart(timestamp = Date.now()) {
@@ -799,11 +944,10 @@ app.post("/api/chat", async (req, res) => {
   try {
     const {
       messages = [],
-      model = "gpt-4o-mini",
-      max_tokens = 500,
       temperature = 0.7,
       response_format
     } = req.body;
+    const aiRouting = await resolveAiRoutingForRequest(req);
 
     // Conservar solo la imagen del ultimo mensaje; las anteriores se reemplazan.
     const cleanMessages = messages.map((msg, index) => {
@@ -830,33 +974,52 @@ app.post("/api/chat", async (req, res) => {
       return msg;
     });
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const buildRequestBody = (modelToUse) => ({
+      model: modelToUse,
+      response_format: response_format || { type: "json_object" },
+      temperature: normalizeTemperature(temperature),
+      messages: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "text",
+              text: "Respondé SOLO en JSON válido. Sin texto extra."
+            }
+          ]
+        },
+        ...cleanMessages
+      ],
+      max_tokens: aiRouting.maxTokens
+    });
+
+    const callOpenAI = (modelToUse) => fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        model,
-        response_format: response_format || { type: "json_object" },
-        temperature,
-        messages: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "text",
-                text: "Respondé SOLO en JSON válido. Sin texto extra."
-              }
-            ]
-          },
-          ...cleanMessages
-        ],
-        max_tokens
-      })
+      body: JSON.stringify(buildRequestBody(modelToUse))
     });
 
-    const data = await response.json();
+    let response = await callOpenAI(aiRouting.model);
+    let data = await response.json();
+
+    if (!response.ok && aiRouting.premiumActive && aiRouting.fallbackModel) {
+      console.warn("[api:chat] Modelo premium fallo. Reintentando con fallback base.", {
+        taskType: aiRouting.taskType,
+        premiumModel: aiRouting.model,
+        fallbackModel: aiRouting.fallbackModel,
+        status: response.status,
+        error: data?.error?.message || data?.error
+      });
+
+      response = await callOpenAI(aiRouting.fallbackModel);
+      data = await response.json();
+      aiRouting.model = aiRouting.fallbackModel;
+      aiRouting.premiumActive = false;
+      aiRouting.reason = "premium_failed_fallback_used";
+    }
 
     if (!response.ok) {
       return res.status(response.status).json({
@@ -874,7 +1037,15 @@ app.post("/api/chat", async (req, res) => {
       raw_content: content,
       usage: data.usage,
       model: data.model,
-      id: data.id
+      id: data.id,
+      zentra_routing: {
+        taskType: aiRouting.taskType,
+        model: aiRouting.model,
+        premiumActive: aiRouting.premiumActive,
+        premiumConsumed: aiRouting.premiumConsumed,
+        counterKey: aiRouting.counterKey,
+        reason: aiRouting.reason
+      }
     });
 
   } catch (error) {
