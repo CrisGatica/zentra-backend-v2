@@ -182,12 +182,24 @@ function getEmailFromChatRequest(req, routing = {}) {
   );
 }
 
+function getPlanTypeFromChatRequest(req, routing = {}) {
+  const value = String(
+    req.body?.zentra_plan_type ||
+    routing.planType ||
+    routing.plan_type ||
+    ""
+  ).trim().toLowerCase();
+
+  return value === "audit" ? "audit" : "subscription";
+}
+
 async function resolveAiRoutingForRequest(req) {
   const routing = req.body?.zentra_routing || {};
   const taskType = normalizeTaskType(routing.taskType || req.body?.task_type || "chat_basic");
   const route = AI_TASK_ROUTING[taskType] || AI_TASK_ROUTING.chat_basic;
   const maxTokens = clampMaxTokens(req.body?.max_tokens || routing.maxTokens, taskType);
   const email = getEmailFromChatRequest(req, routing);
+  const planType = getPlanTypeFromChatRequest(req, routing);
 
   const resolved = {
     taskType,
@@ -200,6 +212,7 @@ async function resolveAiRoutingForRequest(req) {
     premiumActive: false,
     premiumConsumed: false,
     counterKey: route.counterKey || null,
+    planType,
     reason: "base_model"
   };
 
@@ -219,6 +232,31 @@ async function resolveAiRoutingForRequest(req) {
     return {
       ...resolved,
       reason: "premium_model_not_configured"
+    };
+  }
+
+  if (planType === "audit" && ["pdf_summary", "pdf_polish"].includes(taskType)) {
+    const auditUser = await getUserByEmail(email, "audit");
+    const plan = normalizePlan(auditUser?.plan);
+    const credits = Number(auditUser?.audit_credits || 0);
+    const used = Number(auditUser?.audit_credits_used || 0);
+
+    if (!auditUser || auditUser.status !== "active" || used >= credits) {
+      return {
+        ...resolved,
+        plan,
+        reason: "audit_premium_not_allowed"
+      };
+    }
+
+    return {
+      ...resolved,
+      plan,
+      model: premiumModel,
+      premiumActive: true,
+      premiumConsumed: false,
+      counterKey: null,
+      reason: "audit_premium_authorized"
     };
   }
 
