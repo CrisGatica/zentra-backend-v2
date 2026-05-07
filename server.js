@@ -45,10 +45,10 @@ const PLAN_LIMITS = {
 };
 
 const PREMIUM_LIMITS = {
-  free: { premium_chat_used: 0, premium_pdf_used: 0 },
-  starter: { premium_chat_used: 0, premium_pdf_used: 0 },
-  pro: { premium_chat_used: 80, premium_pdf_used: 30 },
-  agency: { premium_chat_used: 300, premium_pdf_used: 80 }
+  free: { premium_chat_used: 20, premium_pdf_used: 0 },
+  starter: { premium_chat_used: 20, premium_pdf_used: 0 },
+  pro: { premium_chat_used: 150, premium_pdf_used: 30 },
+  agency: { premium_chat_used: 400, premium_pdf_used: 80 }
 };
 
 const AI_TASK_ROUTING = {
@@ -67,7 +67,7 @@ const AI_TASK_ROUTING = {
     fallbackModel: ZENTRA_BASE_MODEL,
     premium: true,
     counterKey: "premium_chat_used",
-    allowedPlans: ["pro", "agency"],
+    allowedPlans: ["free", "starter", "pro", "agency"],
     maxTokens: 4096
   },
   seo_analysis: {
