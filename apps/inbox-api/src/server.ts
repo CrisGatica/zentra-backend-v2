@@ -1,13 +1,6 @@
-import Fastify from "fastify";
+import { buildApp } from "./app.js";
 
-const fastify = Fastify({
-  logger: true
-});
-
-fastify.get("/health", async () => ({
-  ok: true,
-  service: "zentra-inbox-api"
-}));
+const fastify = buildApp();
 
 const port = Number(process.env.PORT) || 10000;
 const host = "0.0.0.0";
