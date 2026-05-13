@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsup src/server.ts --format esm,cjs --dts",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js || node dist/server.mjs || node dist/server.cjs"
   },
   "engines": {
     "node": ">=20"
