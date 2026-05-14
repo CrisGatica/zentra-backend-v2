@@ -1,11 +1,28 @@
 import type { FastifyInstance } from "fastify";
 
-import { demoWorkItems } from "../../data/demo-store.js";
+import type { InboxDataAccess } from "../../repositories/index.js";
 
-export async function registerWorkItemRoutes(app: FastifyInstance) {
-  app.get("/v1/work-items", async () => ({
-    ok: true,
-    items: demoWorkItems,
-    total: demoWorkItems.length
-  }));
+export async function registerWorkItemRoutes(app: FastifyInstance, dataAccess: InboxDataAccess) {
+  app.get<{ Querystring: { tenantId?: string } }>("/v1/work-items", async (request, reply) => {
+    try {
+      const items = await dataAccess.repositories.workItems.list({
+        tenantId: request.query.tenantId
+      });
+
+      return {
+        ok: true,
+        source: dataAccess.source,
+        issues: dataAccess.issues,
+        items,
+        total: items.length
+      };
+    } catch (error) {
+      request.log.error(error, "failed to list work items");
+
+      return reply.status(500).send({
+        ok: false,
+        error: "failed_to_list_work_items"
+      });
+    }
+  });
 }

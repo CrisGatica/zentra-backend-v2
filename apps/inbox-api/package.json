@@ -13,10 +13,12 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.8",
     "@types/node": "^22.15.21",
     "fastify": "^5.3.3",
     "tsup": "^8.3.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "zod": "^3.24.4"
   },
   "devDependencies": {
     "tsx": "^4.20.3"
