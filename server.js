@@ -931,7 +931,6 @@ function buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temp
   const body = {
     model,
     input: normalizeOpenAIResponsesInput(messages),
-    temperature: normalizeTemperature(temperature),
     max_output_tokens: maxTokens
   };
 
