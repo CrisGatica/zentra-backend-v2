@@ -56,6 +56,10 @@ const PREMIUM_LIMITS = {
   pro: { premium_chat_used: 150, premium_pdf_used: 30 },
   agency: { premium_chat_used: 400, premium_pdf_used: 80 }
 };
+const TEMP_UNLIMITED_LIMIT = 999999;
+const TEMP_UNLIMITED_AGENCY_EMAILS = new Set([
+  "cristiangaticanegocios@gmail.com"
+]);
 
 const AI_TASK_ROUTING = {
   chat_basic: {
@@ -175,6 +179,40 @@ function normalizePlan(plan = "free") {
 function normalizeCounterValue(value = 0) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) && numberValue >= 0 ? Math.floor(numberValue) : 0;
+}
+
+function hasUnlimitedAgencyOverride(email = "") {
+  return TEMP_UNLIMITED_AGENCY_EMAILS.has(normalizeEmail(email));
+}
+
+function applyUnlimitedAgencySubscriptionUser(email = "", user = {}) {
+  const normalizedEmail = normalizeEmail(email || user.email || "");
+  return {
+    ...getDefaultSubscriptionUser(normalizedEmail),
+    ...user,
+    email: normalizedEmail,
+    plan: "agency",
+    plan_type: "subscription",
+    status: "active",
+    unlimited_agency: true
+  };
+}
+
+function getUnlimitedAuditUsage(email = "", user = {}) {
+  const normalizedEmail = normalizeEmail(email || user.email || "");
+  const used = normalizeCounterValue(user.audit_credits_used || 0);
+  const credits = Math.max(TEMP_UNLIMITED_LIMIT, used + 1000);
+
+  return {
+    email: normalizedEmail,
+    plan: "agency",
+    plan_type: "audit",
+    status: "active",
+    audit_credits: credits,
+    audit_credits_used: used,
+    audit_credits_remaining: Math.max(credits - used, 0),
+    unlimited_agency: true
+  };
 }
 
 function normalizeProvider(provider = "openai") {
@@ -353,6 +391,26 @@ async function resolveAiRoutingForRequest(req) {
   }
 
   if (planType === "audit" && ["pdf_summary", "pdf_polish", "premium_reasoning_audit"].includes(taskType)) {
+    if (hasUnlimitedAgencyOverride(email)) {
+      const resolvedAuditPremium = {
+        ...resolved,
+        plan: "agency",
+        provider: premiumProvider,
+        model: premiumModel,
+        premiumActive: true,
+        premiumConsumed: false,
+        counterKey: null,
+        reason: "audit_premium_authorized_unlimited_override"
+      };
+      logPdfFlow("resolve:audit_premium_authorized_unlimited_override", {
+        provider: resolvedAuditPremium.provider,
+        resolvedModel: resolvedAuditPremium.model,
+        reason: resolvedAuditPremium.reason,
+        plan: "agency"
+      });
+      return resolvedAuditPremium;
+    }
+
     const auditUser = await getUserByEmail(email, "audit");
     const plan = normalizePlan(auditUser?.plan);
     const credits = Number(auditUser?.audit_credits || 0);
@@ -394,7 +452,7 @@ async function resolveAiRoutingForRequest(req) {
   }
 
   const user = await ensureFreshSubscriptionUsage(email);
-  const plan = normalizePlan(user?.plan);
+  const plan = hasUnlimitedAgencyOverride(email) ? "agency" : normalizePlan(user?.plan);
   const allowedPlans = route.allowedPlans || [];
 
   if (!user || user.status !== "active" || !allowedPlans.includes(plan)) {
@@ -672,6 +730,37 @@ function getDefaultSubscriptionUser(email = "") {
 }
 
 function formatSubscriptionUsage(user = {}) {
+  if (user.unlimited_agency || hasUnlimitedAgencyOverride(user.email)) {
+    const actionsUsed = normalizeCounterValue(user.actions_used);
+    const auditsUsed = normalizeCounterValue(user.audits_used);
+    const premiumChatUsed = normalizeCounterValue(user.premium_chat_used);
+    const premiumPdfUsed = normalizeCounterValue(user.premium_pdf_used);
+    const actionsLimit = Math.max(TEMP_UNLIMITED_LIMIT, actionsUsed + 1000);
+    const auditsLimit = Math.max(TEMP_UNLIMITED_LIMIT, auditsUsed + 1000);
+    const premiumChatLimit = Math.max(TEMP_UNLIMITED_LIMIT, premiumChatUsed + 1000);
+    const premiumPdfLimit = Math.max(TEMP_UNLIMITED_LIMIT, premiumPdfUsed + 1000);
+
+    return {
+      plan: "agency",
+      plan_type: "subscription",
+      status: "active",
+      actions_used: actionsUsed,
+      actions_limit: actionsLimit,
+      actions_remaining: Math.max(actionsLimit - actionsUsed, 0),
+      audits_used: auditsUsed,
+      audits_limit: auditsLimit,
+      audits_remaining: Math.max(auditsLimit - auditsUsed, 0),
+      premium_chat_used: premiumChatUsed,
+      premium_chat_limit: premiumChatLimit,
+      premium_chat_remaining: Math.max(premiumChatLimit - premiumChatUsed, 0),
+      premium_pdf_used: premiumPdfUsed,
+      premium_pdf_limit: premiumPdfLimit,
+      premium_pdf_remaining: Math.max(premiumPdfLimit - premiumPdfUsed, 0),
+      billing_cycle_start: normalizeCounterValue(user.billing_cycle_start || Date.now()),
+      unlimited_agency: true
+    };
+  }
+
   const plan = normalizePlan(user.plan);
   const limits = getPlanLimits(plan);
   const premiumLimits = getPremiumLimits(plan);
@@ -701,6 +790,11 @@ function formatSubscriptionUsage(user = {}) {
 }
 
 async function ensureFreshSubscriptionUsage(email) {
+  if (hasUnlimitedAgencyOverride(email)) {
+    const existingUser = await getUserByEmail(email, "subscription");
+    return applyUnlimitedAgencySubscriptionUser(email, existingUser || {});
+  }
+
   const existingUser = await getUserByEmail(email, "subscription");
   const user = existingUser || getDefaultSubscriptionUser(email);
 
@@ -729,6 +823,15 @@ async function ensureFreshSubscriptionUsage(email) {
 }
 
 async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
+  if (hasUnlimitedAgencyOverride(email)) {
+    const user = await ensureFreshSubscriptionUsage(email);
+    return {
+      allowed: true,
+      reason: "unlimited_agency_override",
+      user
+    };
+  }
+
   const allowedCounters = new Set(["actions_used", "audits_used", "premium_chat_used", "premium_pdf_used"]);
   if (!allowedCounters.has(counterKey)) {
     return {
@@ -793,6 +896,15 @@ async function grantAuditAccess(paymentInfo = {}) {
 }
 
 async function consumeAuditCredit(email) {
+  if (hasUnlimitedAgencyOverride(email)) {
+    const user = await getUserByEmail(email, "audit");
+    return {
+      allowed: true,
+      reason: "unlimited_agency_override",
+      user: getUnlimitedAuditUsage(email, user || {})
+    };
+  }
+
   const user = await getUserByEmail(email, "audit");
 
   if (!user || user.status !== "active") {
@@ -1230,6 +1342,26 @@ app.get("/api/user", async (req, res) => {
       ? await ensureFreshSubscriptionUsage(email)
       : await getUserByEmail(email, planType);
 
+    if (hasUnlimitedAgencyOverride(email)) {
+      if (planType === "subscription") {
+        const subscriptionUser = applyUnlimitedAgencySubscriptionUser(email, user || {});
+        return res.json({
+          ...formatSubscriptionUsage(subscriptionUser),
+          audit_credits: 0,
+          audit_credits_used: 0,
+          audit_credits_remaining: 0,
+          found: true,
+          unlimited_agency: true
+        });
+      }
+
+      const auditUsage = getUnlimitedAuditUsage(email, user || {});
+      return res.json({
+        ...auditUsage,
+        found: true
+      });
+    }
+
     if (!user || user.status === "cancelled") {
       return res.json({
         plan: "free",
@@ -1289,6 +1421,15 @@ app.get("/api/subscription/usage", async (req, res) => {
 
     if (!email) {
       return res.status(400).json({ error: "email es requerido" });
+    }
+
+    if (hasUnlimitedAgencyOverride(email)) {
+      const user = await ensureFreshSubscriptionUsage(email);
+      return res.json({
+        ...formatSubscriptionUsage(user),
+        found: true,
+        unlimited_agency: true
+      });
     }
 
     const user = await ensureFreshSubscriptionUsage(email);
