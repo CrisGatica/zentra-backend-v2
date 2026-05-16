@@ -9,6 +9,12 @@ const PORT = process.env.PORT || 3000;
 const LEMON_WEBHOOK_SECRET = process.env.LEMON_SQUEEZY_WEBHOOK_SECRET || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+const ANTHROPIC_API_VERSION = process.env.ANTHROPIC_API_VERSION || "2023-06-01";
+const ZENTRA_BASE_PROVIDER = normalizeProvider(process.env.ZENTRA_BASE_PROVIDER || "openai");
+const ZENTRA_PREMIUM_PROVIDER = normalizeProvider(process.env.ZENTRA_PREMIUM_PROVIDER || ZENTRA_BASE_PROVIDER);
+const ZENTRA_PREMIUM_FINAL_PROVIDER = normalizeProvider(process.env.ZENTRA_PREMIUM_FINAL_PROVIDER || ZENTRA_PREMIUM_PROVIDER);
 const ZENTRA_BASE_MODEL = process.env.ZENTRA_BASE_MODEL || "gpt-4o-mini";
 const ZENTRA_PREMIUM_MODEL = process.env.ZENTRA_PREMIUM_MODEL || ZENTRA_BASE_MODEL;
 const ZENTRA_PREMIUM_FINAL_MODEL = process.env.ZENTRA_PREMIUM_FINAL_MODEL || ZENTRA_PREMIUM_MODEL;
@@ -53,17 +59,21 @@ const PREMIUM_LIMITS = {
 
 const AI_TASK_ROUTING = {
   chat_basic: {
+    provider: ZENTRA_BASE_PROVIDER,
     model: ZENTRA_BASE_MODEL,
     premium: false,
     maxTokens: 4096
   },
   chat_image_ocr: {
+    provider: ZENTRA_BASE_PROVIDER,
     model: ZENTRA_BASE_MODEL,
     premium: false,
     maxTokens: 4096
   },
   chat_premium: {
+    provider: ZENTRA_PREMIUM_PROVIDER,
     model: ZENTRA_PREMIUM_MODEL,
+    fallbackProvider: ZENTRA_BASE_PROVIDER,
     fallbackModel: ZENTRA_BASE_MODEL,
     premium: true,
     counterKey: "premium_chat_used",
@@ -71,12 +81,15 @@ const AI_TASK_ROUTING = {
     maxTokens: 4096
   },
   seo_analysis: {
+    provider: ZENTRA_BASE_PROVIDER,
     model: ZENTRA_BASE_MODEL,
     premium: false,
     maxTokens: 2048
   },
   pdf_summary: {
+    provider: ZENTRA_PREMIUM_PROVIDER,
     model: ZENTRA_PREMIUM_MODEL,
+    fallbackProvider: ZENTRA_BASE_PROVIDER,
     fallbackModel: ZENTRA_BASE_MODEL,
     premium: true,
     counterKey: "premium_pdf_used",
@@ -84,14 +97,33 @@ const AI_TASK_ROUTING = {
     maxTokens: 2200
   },
   pdf_polish: {
+    provider: ZENTRA_PREMIUM_FINAL_PROVIDER,
     model: ZENTRA_PREMIUM_FINAL_MODEL,
+    fallbackProvider: ZENTRA_BASE_PROVIDER,
     fallbackModel: ZENTRA_BASE_MODEL,
     premium: true,
     counterKey: "premium_pdf_used",
     allowedPlans: ["agency"],
     maxTokens: 3072
+  },
+  premium_reasoning_audit: {
+    provider: ZENTRA_PREMIUM_FINAL_PROVIDER,
+    model: ZENTRA_PREMIUM_FINAL_MODEL,
+    fallbackProvider: ZENTRA_BASE_PROVIDER,
+    fallbackModel: ZENTRA_BASE_MODEL,
+    premium: true,
+    counterKey: "premium_pdf_used",
+    allowedPlans: ["pro", "agency"],
+    maxTokens: 2200
   }
 };
+const PDF_FLOW_TASKS = new Set([
+  "seo_analysis",
+  "pdf_summary",
+  "pdf_polish",
+  "premium_reasoning_audit"
+]);
+let PREMIUM_AUDIT_ROUTE_HIT_COUNT = 0;
 
 const LEMON_PRODUCT_MAP = {
   // Zentra AI SaaS - suscripciones mensuales y anuales
@@ -145,6 +177,20 @@ function normalizeCounterValue(value = 0) {
   return Number.isFinite(numberValue) && numberValue >= 0 ? Math.floor(numberValue) : 0;
 }
 
+function normalizeProvider(provider = "openai") {
+  const normalizedProvider = String(provider || "openai").trim().toLowerCase();
+  return normalizedProvider === "anthropic" || normalizedProvider === "claude"
+    ? "anthropic"
+    : "openai";
+}
+
+function isProviderConfigured(provider = "openai") {
+  const normalizedProvider = normalizeProvider(provider);
+  return normalizedProvider === "anthropic"
+    ? Boolean(ANTHROPIC_API_KEY)
+    : Boolean(OPENAI_API_KEY);
+}
+
 function getPlanLimits(plan = "free") {
   return PLAN_LIMITS[normalizePlan(plan)] || PLAN_LIMITS.free;
 }
@@ -156,6 +202,11 @@ function getPremiumLimits(plan = "free") {
 function normalizeTaskType(taskType = "chat_basic") {
   const normalizedTaskType = String(taskType || "chat_basic").trim().toLowerCase();
   return AI_TASK_ROUTING[normalizedTaskType] ? normalizedTaskType : "chat_basic";
+}
+
+function isPdfFlowTask(taskType = "chat_basic") {
+  const normalizedTaskType = String(taskType || "chat_basic").trim().toLowerCase();
+  return PDF_FLOW_TASKS.has(normalizedTaskType);
 }
 
 function clampMaxTokens(requestedMaxTokens, taskType = "chat_basic") {
@@ -195,17 +246,53 @@ function getPlanTypeFromChatRequest(req, routing = {}) {
 
 async function resolveAiRoutingForRequest(req) {
   const routing = req.body?.zentra_routing || {};
-  const taskType = normalizeTaskType(routing.taskType || req.body?.task_type || "chat_basic");
+  const incomingTaskType = routing.taskType || req.body?.task_type || "chat_basic";
+  const taskType = normalizeTaskType(incomingTaskType);
   const route = AI_TASK_ROUTING[taskType] || AI_TASK_ROUTING.chat_basic;
   const maxTokens = clampMaxTokens(req.body?.max_tokens || routing.maxTokens, taskType);
   const email = getEmailFromChatRequest(req, routing);
   const planType = getPlanTypeFromChatRequest(req, routing);
+  const requestedModel = req.body?.model || routing.selectedModel || "";
+  const tracePdfFlow = isPdfFlowTask(incomingTaskType) || isPdfFlowTask(taskType);
+  const premiumAuditRouteRequested = String(incomingTaskType || "").trim().toLowerCase() === "premium_reasoning_audit";
+  const premiumAuditRouteResolved = taskType === "premium_reasoning_audit";
+
+  const logPdfFlow = (stage, details = {}) => {
+    if (!tracePdfFlow) return;
+    console.log("[PDF FLOW]", {
+      stage,
+      taskType: incomingTaskType,
+      requestedModel,
+      resolvedTask: taskType,
+      resolvedModel: details.resolvedModel || null,
+      provider: details.provider || null,
+      reason: details.reason || null,
+      ...details
+    });
+  };
+
+  if (premiumAuditRouteRequested || premiumAuditRouteResolved) {
+    PREMIUM_AUDIT_ROUTE_HIT_COUNT += 1;
+    console.log("[PDF FLOW] PREMIUM AUDIT ROUTE HIT", {
+      hits: PREMIUM_AUDIT_ROUTE_HIT_COUNT,
+      incomingTaskType,
+      resolvedTask: taskType
+    });
+  }
+
+  logPdfFlow("resolve:start", {
+    provider: route.provider || ZENTRA_BASE_PROVIDER,
+    resolvedModel: route.model || ZENTRA_BASE_MODEL,
+    planType
+  });
 
   const resolved = {
     taskType,
     email,
-    requestedModel: req.body?.model || routing.selectedModel || "",
+    requestedModel,
+    provider: ZENTRA_BASE_PROVIDER,
     model: ZENTRA_BASE_MODEL,
+    fallbackProvider: route.fallbackProvider || ZENTRA_BASE_PROVIDER,
     fallbackModel: route.fallbackModel || ZENTRA_BASE_MODEL,
     maxTokens,
     premiumRequested: Boolean(routing.premiumActive || routing.premiumAllowed || route.premium),
@@ -217,10 +304,20 @@ async function resolveAiRoutingForRequest(req) {
   };
 
   if (!route.premium) {
+    logPdfFlow("resolve:base", {
+      provider: resolved.provider,
+      resolvedModel: resolved.model,
+      reason: resolved.reason
+    });
     return resolved;
   }
 
   if (!email) {
+    logPdfFlow("resolve:blocked_missing_email", {
+      provider: resolved.provider,
+      resolvedModel: resolved.model,
+      reason: "missing_user_email"
+    });
     return {
       ...resolved,
       reason: "missing_user_email"
@@ -228,20 +325,48 @@ async function resolveAiRoutingForRequest(req) {
   }
 
   const premiumModel = route.model || ZENTRA_BASE_MODEL;
-  if (!premiumModel || premiumModel === ZENTRA_BASE_MODEL) {
+  const premiumProvider = normalizeProvider(route.provider || ZENTRA_BASE_PROVIDER);
+  const isSameBaseLayer = premiumProvider === ZENTRA_BASE_PROVIDER && premiumModel === ZENTRA_BASE_MODEL;
+
+  if (!premiumModel || isSameBaseLayer) {
+    logPdfFlow("resolve:blocked_premium_model_not_configured", {
+      provider: resolved.provider,
+      resolvedModel: resolved.model,
+      reason: "premium_model_not_configured"
+    });
     return {
       ...resolved,
       reason: "premium_model_not_configured"
     };
   }
 
-  if (planType === "audit" && ["pdf_summary", "pdf_polish"].includes(taskType)) {
+  if (!isProviderConfigured(premiumProvider)) {
+    logPdfFlow("resolve:blocked_premium_provider_not_configured", {
+      provider: resolved.provider,
+      resolvedModel: resolved.model,
+      reason: "premium_provider_not_configured"
+    });
+    return {
+      ...resolved,
+      reason: "premium_provider_not_configured"
+    };
+  }
+
+  if (planType === "audit" && ["pdf_summary", "pdf_polish", "premium_reasoning_audit"].includes(taskType)) {
     const auditUser = await getUserByEmail(email, "audit");
     const plan = normalizePlan(auditUser?.plan);
     const credits = Number(auditUser?.audit_credits || 0);
     const used = Number(auditUser?.audit_credits_used || 0);
 
     if (!auditUser || auditUser.status !== "active" || used >= credits) {
+      logPdfFlow("resolve:audit_premium_not_allowed", {
+        provider: resolved.provider,
+        resolvedModel: resolved.model,
+        reason: "audit_premium_not_allowed",
+        plan,
+        credits,
+        used
+      });
       return {
         ...resolved,
         plan,
@@ -249,15 +374,23 @@ async function resolveAiRoutingForRequest(req) {
       };
     }
 
-    return {
+    const resolvedAuditPremium = {
       ...resolved,
       plan,
+      provider: premiumProvider,
       model: premiumModel,
       premiumActive: true,
       premiumConsumed: false,
       counterKey: null,
       reason: "audit_premium_authorized"
     };
+    logPdfFlow("resolve:audit_premium_authorized", {
+      provider: resolvedAuditPremium.provider,
+      resolvedModel: resolvedAuditPremium.model,
+      reason: resolvedAuditPremium.reason,
+      plan
+    });
+    return resolvedAuditPremium;
   }
 
   const user = await ensureFreshSubscriptionUsage(email);
@@ -265,6 +398,12 @@ async function resolveAiRoutingForRequest(req) {
   const allowedPlans = route.allowedPlans || [];
 
   if (!user || user.status !== "active" || !allowedPlans.includes(plan)) {
+    logPdfFlow("resolve:premium_not_allowed_for_plan", {
+      provider: resolved.provider,
+      resolvedModel: resolved.model,
+      reason: "premium_not_allowed_for_plan",
+      plan
+    });
     return {
       ...resolved,
       plan,
@@ -274,6 +413,12 @@ async function resolveAiRoutingForRequest(req) {
 
   const premiumUsage = await consumeSubscriptionUsage(email, route.counterKey);
   if (!premiumUsage.allowed) {
+    logPdfFlow("resolve:premium_limit_reached", {
+      provider: resolved.provider,
+      resolvedModel: resolved.model,
+      reason: premiumUsage.reason || "premium_limit_reached",
+      plan
+    });
     return {
       ...resolved,
       plan,
@@ -281,14 +426,22 @@ async function resolveAiRoutingForRequest(req) {
     };
   }
 
-  return {
+  const resolvedPremium = {
     ...resolved,
     plan,
+    provider: premiumProvider,
     model: premiumModel,
     premiumActive: true,
     premiumConsumed: true,
     reason: "premium_authorized"
   };
+  logPdfFlow("resolve:premium_authorized", {
+    provider: resolvedPremium.provider,
+    resolvedModel: resolvedPremium.model,
+    reason: resolvedPremium.reason,
+    plan
+  });
+  return resolvedPremium;
 }
 
 function getNextBillingCycleStart(timestamp = Date.now()) {
@@ -702,12 +855,268 @@ function parseJsonSafely(content) {
   return {};
 }
 
+function extractTextFromContent(content = "") {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return String(content || "");
+
+  return content
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      if (item.type === "text") return item.text || "";
+      if (item.type === "image_url") return "[imagen adjunta]";
+      return item.text || "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function normalizeAnthropicMessages(messages = []) {
+  return messages
+    .filter((msg) => msg?.role !== "system")
+    .map((msg) => ({
+      role: msg.role === "assistant" ? "assistant" : "user",
+      content: extractTextFromContent(msg.content)
+    }))
+    .filter((msg) => msg.content);
+}
+
+function buildOpenAIRequestBody({ model, messages, responseFormat, temperature, maxTokens }) {
+  return {
+    model,
+    response_format: responseFormat || { type: "json_object" },
+    temperature: normalizeTemperature(temperature),
+    messages,
+    max_tokens: maxTokens
+  };
+}
+
+function shouldUseOpenAIResponsesApi(model = "") {
+  return /^gpt-5/i.test(String(model || "").trim());
+}
+
+function normalizeOpenAIResponsesContent(content = "") {
+  if (typeof content === "string") {
+    return [{ type: "input_text", text: content }];
+  }
+
+  if (!Array.isArray(content)) {
+    return [{ type: "input_text", text: String(content || "") }];
+  }
+
+  return content
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      if (item.type === "text") {
+        return { type: "input_text", text: item.text || "" };
+      }
+      if (item.type === "image_url" && item.image_url?.url) {
+        return { type: "input_image", image_url: item.image_url.url };
+      }
+      if (typeof item.text === "string") {
+        return { type: "input_text", text: item.text };
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function normalizeOpenAIResponsesInput(messages = []) {
+  return messages.map((msg) => ({
+    role: msg?.role === "assistant" ? "assistant" : (msg?.role === "system" ? "system" : "user"),
+    content: normalizeOpenAIResponsesContent(msg?.content)
+  }));
+}
+
+function buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temperature, maxTokens }) {
+  const body = {
+    model,
+    input: normalizeOpenAIResponsesInput(messages),
+    temperature: normalizeTemperature(temperature),
+    max_output_tokens: maxTokens
+  };
+
+  if (responseFormat?.type === "json_object") {
+    body.text = { format: { type: "json_object" } };
+  }
+
+  return body;
+}
+
+function buildAnthropicRequestBody({ model, messages, temperature, maxTokens }) {
+  return {
+    model,
+    system: "Respondé SOLO en JSON válido. Sin texto extra.",
+    temperature: normalizeTemperature(temperature),
+    max_tokens: maxTokens,
+    messages: normalizeAnthropicMessages(messages)
+  };
+}
+
+async function callOpenAI({ model, messages, responseFormat, temperature, maxTokens }) {
+  if (!OPENAI_API_KEY) {
+    return {
+      ok: false,
+      status: 500,
+      data: { error: { message: "OPENAI_API_KEY no esta configurada" } },
+      provider: "openai",
+      model
+    };
+  }
+
+  const useResponsesApi = shouldUseOpenAIResponsesApi(model);
+  const endpoint = useResponsesApi
+    ? "https://api.openai.com/v1/responses"
+    : "https://api.openai.com/v1/chat/completions";
+  const body = useResponsesApi
+    ? buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temperature, maxTokens })
+    : buildOpenAIRequestBody({ model, messages, responseFormat, temperature, maxTokens });
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json().catch(() => ({}));
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data,
+    provider: "openai",
+    model: data.model || model,
+    api: useResponsesApi ? "responses" : "chat_completions"
+  };
+}
+
+async function callAnthropic({ model, messages, temperature, maxTokens }) {
+  if (!ANTHROPIC_API_KEY) {
+    return {
+      ok: false,
+      status: 500,
+      data: { error: { message: "ANTHROPIC_API_KEY no esta configurada" } },
+      provider: "anthropic",
+      model
+    };
+  }
+
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": ANTHROPIC_API_VERSION,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(buildAnthropicRequestBody({
+      model,
+      messages,
+      temperature,
+      maxTokens
+    }))
+  });
+  const data = await response.json().catch(() => ({}));
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data,
+    provider: "anthropic",
+    model: data.model || model
+  };
+}
+
+function getAiResponseText(result = {}) {
+  if (result.provider === "anthropic") {
+    return (result.data?.content || [])
+      .map((item) => item?.text || "")
+      .filter(Boolean)
+      .join("\n")
+      .trim() || "{}";
+  }
+
+  if (result.provider === "openai" && result.api === "responses") {
+    if (typeof result.data?.output_text === "string" && result.data.output_text.trim()) {
+      return result.data.output_text.trim();
+    }
+
+    const outputItems = Array.isArray(result.data?.output) ? result.data.output : [];
+    const textChunks = [];
+    outputItems.forEach((item) => {
+      const contents = Array.isArray(item?.content) ? item.content : [];
+      contents.forEach((contentItem) => {
+        if (typeof contentItem?.text === "string" && contentItem.text.trim()) {
+          textChunks.push(contentItem.text.trim());
+        }
+      });
+    });
+
+    return textChunks.join("\n").trim() || "{}";
+  }
+
+  return result.data?.choices?.[0]?.message?.content ?? "{}";
+}
+
+function getAiUsage(result = {}) {
+  if (result.provider === "anthropic") {
+    return result.data?.usage
+      ? {
+          prompt_tokens: result.data.usage.input_tokens,
+          completion_tokens: result.data.usage.output_tokens,
+          total_tokens: Number(result.data.usage.input_tokens || 0) + Number(result.data.usage.output_tokens || 0),
+          raw: result.data.usage
+        }
+      : undefined;
+  }
+
+  if (result.provider === "openai" && result.api === "responses") {
+    const usage = result.data?.usage || {};
+    const inputTokens = Number(usage.input_tokens || 0);
+    const outputTokens = Number(usage.output_tokens || 0);
+    return {
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: inputTokens + outputTokens,
+      raw: usage
+    };
+  }
+
+  return result.data?.usage;
+}
+
+function getAiErrorMessage(result = {}) {
+  return result.data?.error?.message
+    || result.data?.error
+    || `Error en ${result.provider || "proveedor IA"}`;
+}
+
+async function callAiProvider({ provider, model, messages, responseFormat, temperature, maxTokens }) {
+  const normalizedProvider = normalizeProvider(provider);
+
+  if (normalizedProvider === "anthropic") {
+    return callAnthropic({ model, messages, temperature, maxTokens });
+  }
+
+  return callOpenAI({ model, messages, responseFormat, temperature, maxTokens });
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     service: "zentra-backend",
     supabase_configured: Boolean(supabase),
-    lemon_webhook_configured: Boolean(LEMON_WEBHOOK_SECRET)
+    lemon_webhook_configured: Boolean(LEMON_WEBHOOK_SECRET),
+    ai: {
+      openai_configured: Boolean(OPENAI_API_KEY),
+      anthropic_configured: Boolean(ANTHROPIC_API_KEY),
+      base_provider: ZENTRA_BASE_PROVIDER,
+      base_model: ZENTRA_BASE_MODEL,
+      premium_provider: ZENTRA_PREMIUM_PROVIDER,
+      premium_model: ZENTRA_PREMIUM_MODEL,
+      premium_final_provider: ZENTRA_PREMIUM_FINAL_PROVIDER,
+      premium_final_model: ZENTRA_PREMIUM_FINAL_MODEL
+    }
   });
 });
 
@@ -985,7 +1394,50 @@ app.post("/api/chat", async (req, res) => {
       temperature = 0.7,
       response_format
     } = req.body;
+    const incomingRouting = req.body?.zentra_routing || {};
+    const incomingTaskType = incomingRouting.taskType || req.body?.task_type || "chat_basic";
+    const incomingRequestedModel = req.body?.model || incomingRouting.selectedModel || null;
+    const incomingReqBodyTaskType = req.body?.taskType || null;
+    const incomingReqBodyModel = req.body?.model || null;
+    const tracePdfFlow = isPdfFlowTask(incomingTaskType);
+    const logPdfTrace = (payload = {}) => {
+      if (!tracePdfFlow) return;
+      console.log("[PDF FLOW]", payload);
+    };
+    if (tracePdfFlow) {
+      console.log("===== PDF FLOW START =====");
+      logPdfTrace({
+        stage: "chat:entry",
+        "incoming taskType": incomingTaskType,
+        "req.body.taskType": incomingReqBodyTaskType,
+        "incoming requested model": incomingRequestedModel,
+        "req.body.model": incomingReqBodyModel
+      });
+    }
     const aiRouting = await resolveAiRoutingForRequest(req);
+    let premiumFallbackError = null;
+    const traceResolvedPdfFlow = tracePdfFlow || isPdfFlowTask(aiRouting.taskType);
+    if (traceResolvedPdfFlow) {
+      logPdfTrace({
+        stage: "chat:routing_resolved",
+        "incoming taskType": incomingTaskType,
+        "req.body.taskType": incomingReqBodyTaskType,
+        "incoming requested model": incomingRequestedModel,
+        "req.body.model": incomingReqBodyModel,
+        "resolved task": aiRouting.taskType,
+        "aiRouting object": JSON.stringify(aiRouting),
+        "resolved model": aiRouting.model,
+        provider: aiRouting.provider,
+        reason: aiRouting.reason
+      });
+    }
+    console.log("[ZENTRA MODEL] OPENAI REQUEST MODEL:", {
+      taskType: aiRouting.taskType,
+      requestedModel: req.body?.model || req.body?.zentra_routing?.selectedModel || null,
+      selectedModel: aiRouting.model,
+      provider: aiRouting.provider,
+      reason: aiRouting.reason
+    });
 
     // Conservar solo la imagen del ultimo mensaje; las anteriores se reemplazan.
     const cleanMessages = messages.map((msg, index) => {
@@ -1012,81 +1464,185 @@ app.post("/api/chat", async (req, res) => {
       return msg;
     });
 
-    const buildRequestBody = (modelToUse) => ({
-      model: modelToUse,
-      response_format: response_format || { type: "json_object" },
-      temperature: normalizeTemperature(temperature),
-      messages: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "text",
-              text: "Respondé SOLO en JSON válido. Sin texto extra."
-            }
-          ]
-        },
-        ...cleanMessages
-      ],
-      max_tokens: aiRouting.maxTokens
-    });
-
-    const callOpenAI = (modelToUse) => fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
+    const providerMessages = [
+      {
+        role: "system",
+        content: [
+          {
+            type: "text",
+            text: "Respondé SOLO en JSON válido. Sin texto extra."
+          }
+        ]
       },
-      body: JSON.stringify(buildRequestBody(modelToUse))
+      ...cleanMessages
+    ];
+
+    if (traceResolvedPdfFlow) {
+      logPdfTrace({
+        stage: "before callAiProvider",
+        "incoming taskType": incomingTaskType,
+        "incoming requested model": incomingRequestedModel,
+        "resolved task": aiRouting.taskType,
+        "resolved model": aiRouting.model,
+        provider: aiRouting.provider,
+        model: aiRouting.model
+      });
+    }
+
+    let result = await callAiProvider({
+      provider: aiRouting.provider,
+      model: aiRouting.model,
+      messages: providerMessages,
+      responseFormat: response_format,
+      temperature,
+      maxTokens: aiRouting.maxTokens
     });
+    if (traceResolvedPdfFlow) {
+      logPdfTrace({
+        stage: "after callAiProvider",
+        "incoming taskType": incomingTaskType,
+        "incoming requested model": incomingRequestedModel,
+        "resolved task": aiRouting.taskType,
+        "resolved model": aiRouting.model,
+        provider: result.provider || aiRouting.provider,
+        "response.model": result.model || null,
+        ok: Boolean(result.ok),
+        status: Number(result.status || 0)
+      });
+    }
 
-    let response = await callOpenAI(aiRouting.model);
-    let data = await response.json();
-
-    if (!response.ok && aiRouting.premiumActive && aiRouting.fallbackModel) {
+    if (!result.ok && aiRouting.premiumActive && aiRouting.fallbackModel) {
+      premiumFallbackError = getAiErrorMessage(result);
       console.warn("[api:chat] Modelo premium fallo. Reintentando con fallback base.", {
         taskType: aiRouting.taskType,
+        premiumProvider: aiRouting.provider,
         premiumModel: aiRouting.model,
+        fallbackProvider: aiRouting.fallbackProvider,
         fallbackModel: aiRouting.fallbackModel,
-        status: response.status,
-        error: data?.error?.message || data?.error
+        status: result.status,
+        error: premiumFallbackError
       });
 
-      response = await callOpenAI(aiRouting.fallbackModel);
-      data = await response.json();
+      if (traceResolvedPdfFlow) {
+        logPdfTrace({
+          stage: "before callAiProvider fallback",
+          "incoming taskType": incomingTaskType,
+          "incoming requested model": incomingRequestedModel,
+          "resolved task": aiRouting.taskType,
+          "resolved model": aiRouting.fallbackModel,
+          provider: aiRouting.fallbackProvider,
+          model: aiRouting.fallbackModel
+        });
+      }
+
+      result = await callAiProvider({
+        provider: aiRouting.fallbackProvider,
+        model: aiRouting.fallbackModel,
+        messages: providerMessages,
+        responseFormat: response_format,
+        temperature,
+        maxTokens: aiRouting.maxTokens
+      });
+      if (traceResolvedPdfFlow) {
+        logPdfTrace({
+          stage: "after callAiProvider fallback",
+          "incoming taskType": incomingTaskType,
+          "incoming requested model": incomingRequestedModel,
+          "resolved task": aiRouting.taskType,
+          "resolved model": aiRouting.fallbackModel,
+          provider: result.provider || aiRouting.fallbackProvider,
+          "response.model": result.model || null,
+          ok: Boolean(result.ok),
+          status: Number(result.status || 0)
+        });
+      }
+      aiRouting.provider = aiRouting.fallbackProvider;
       aiRouting.model = aiRouting.fallbackModel;
       aiRouting.premiumActive = false;
       aiRouting.reason = "premium_failed_fallback_used";
     }
 
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: data?.error?.message || "Error en OpenAI",
-        raw: data
+    if (!result.ok) {
+      if (traceResolvedPdfFlow) {
+        logPdfTrace({
+          stage: "chat:error_response",
+          "incoming taskType": incomingTaskType,
+          "incoming requested model": incomingRequestedModel,
+          "resolved task": aiRouting.taskType,
+          "resolved model": aiRouting.model,
+          provider: result.provider || aiRouting.provider,
+          "response.model": result.model || null,
+          ok: Boolean(result.ok),
+          status: Number(result.status || 0)
+        });
+        console.log("===== PDF FLOW END =====");
+      }
+      return res.status(result.status).json({
+        error: getAiErrorMessage(result),
+        provider: result.provider,
+        raw: result.data
       });
     }
 
-    const content = data.choices?.[0]?.message?.content ?? "{}";
+    const content = getAiResponseText(result);
     const parsed = parseJsonSafely(content);
+    console.log("[ZENTRA MODEL] OPENAI RESPONSE MODEL:", {
+      taskType: aiRouting.taskType,
+      requestedModel: req.body?.model || req.body?.zentra_routing?.selectedModel || null,
+      selectedModel: aiRouting.model,
+      actualModel: result.model,
+      provider: result.provider
+    });
+    if (traceResolvedPdfFlow) {
+      logPdfTrace({
+        stage: "chat:success_response",
+        "incoming taskType": incomingTaskType,
+        "incoming requested model": incomingRequestedModel,
+        "resolved task": aiRouting.taskType,
+        "resolved model": aiRouting.model,
+        provider: result.provider,
+        "response.model": result.model || null,
+        ok: true,
+        status: Number(result.status || 200)
+      });
+      console.log("===== PDF FLOW END =====");
+    }
 
     res.json({
       success: true,
       analysis: parsed,
       raw_content: content,
-      usage: data.usage,
-      model: data.model,
-      id: data.id,
+      usage: getAiUsage(result),
+      provider: result.provider,
+      model: result.model,
+      id: result.data?.id,
       zentra_routing: {
         taskType: aiRouting.taskType,
+        provider: aiRouting.provider,
         model: aiRouting.model,
         premiumActive: aiRouting.premiumActive,
         premiumConsumed: aiRouting.premiumConsumed,
         counterKey: aiRouting.counterKey,
-        reason: aiRouting.reason
+        reason: aiRouting.reason,
+        premiumFallbackError
       }
     });
 
   } catch (error) {
+    try {
+      const incomingRouting = req.body?.zentra_routing || {};
+      const incomingTaskType = incomingRouting.taskType || req.body?.task_type || "chat_basic";
+      if (isPdfFlowTask(incomingTaskType)) {
+        console.log("[PDF FLOW]", {
+          stage: "chat:exception",
+          "incoming taskType": incomingTaskType,
+          "req.body.taskType": req.body?.taskType || null,
+          "incoming requested model": req.body?.model || incomingRouting.selectedModel || null,
+          error: error?.message || String(error || "unknown_error")
+        });
+        console.log("===== PDF FLOW END =====");
+      }
+    } catch (_) {}
     console.error(error);
     res.status(500).json({ error: "Error en el servidor" });
   }
