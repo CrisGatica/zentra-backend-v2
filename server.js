@@ -18,6 +18,14 @@ const ZENTRA_PREMIUM_FINAL_PROVIDER = normalizeProvider(process.env.ZENTRA_PREMI
 const ZENTRA_BASE_MODEL = process.env.ZENTRA_BASE_MODEL || "gpt-4o-mini";
 const ZENTRA_PREMIUM_MODEL = process.env.ZENTRA_PREMIUM_MODEL || ZENTRA_BASE_MODEL;
 const ZENTRA_PREMIUM_FINAL_MODEL = process.env.ZENTRA_PREMIUM_FINAL_MODEL || ZENTRA_PREMIUM_MODEL;
+const ZENTRA_EXECUTIVE_REFINER_ENABLED = String(process.env.ZENTRA_EXECUTIVE_REFINER_ENABLED || "false").trim().toLowerCase() === "true";
+const ZENTRA_EXECUTIVE_REFINER_PROVIDER = normalizeProvider(process.env.ZENTRA_EXECUTIVE_REFINER_PROVIDER || ZENTRA_PREMIUM_FINAL_PROVIDER);
+const ZENTRA_EXECUTIVE_REFINER_MODEL = process.env.ZENTRA_EXECUTIVE_REFINER_MODEL || ZENTRA_PREMIUM_FINAL_MODEL;
+const ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS = Math.max(
+  256,
+  normalizeCounterValue(process.env.ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS || 900) || 900
+);
+const ZENTRA_EXECUTIVE_REFINER_TEMPERATURE = normalizeTemperature(process.env.ZENTRA_EXECUTIVE_REFINER_TEMPERATURE || 0.2);
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: {
@@ -119,13 +127,24 @@ const AI_TASK_ROUTING = {
     counterKey: "premium_pdf_used",
     allowedPlans: ["pro", "agency"],
     maxTokens: 2200
+  },
+  executive_refiner_pdf: {
+    provider: ZENTRA_EXECUTIVE_REFINER_PROVIDER,
+    model: ZENTRA_EXECUTIVE_REFINER_MODEL,
+    fallbackProvider: ZENTRA_PREMIUM_FINAL_PROVIDER,
+    fallbackModel: ZENTRA_PREMIUM_FINAL_MODEL,
+    premium: true,
+    counterKey: "premium_pdf_used",
+    allowedPlans: ["pro", "agency"],
+    maxTokens: ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS
   }
 };
 const PDF_FLOW_TASKS = new Set([
   "seo_analysis",
   "pdf_summary",
   "pdf_polish",
-  "premium_reasoning_audit"
+  "premium_reasoning_audit",
+  "executive_refiner_pdf"
 ]);
 let PREMIUM_AUDIT_ROUTE_HIT_COUNT = 0;
 
@@ -993,17 +1012,26 @@ function normalizeAnthropicMessages(messages = []) {
 }
 
 function buildOpenAIRequestBody({ model, messages, responseFormat, temperature, maxTokens }) {
-  return {
+  const body = {
     model,
     response_format: responseFormat || { type: "json_object" },
-    temperature: normalizeTemperature(temperature),
     messages,
     max_tokens: maxTokens
   };
+
+  if (!shouldOmitTemperatureForModel(model)) {
+    body.temperature = normalizeTemperature(temperature);
+  }
+
+  return body;
 }
 
 function shouldUseOpenAIResponsesApi(model = "") {
   return /^gpt-5/i.test(String(model || "").trim());
+}
+
+function shouldOmitTemperatureForModel(model = "") {
+  return /^gpt-5($|-)/i.test(String(model || "").trim());
 }
 
 function normalizeOpenAIResponsesContent(content = "") {
@@ -1048,6 +1076,10 @@ function buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temp
 
   if (responseFormat?.type === "json_object") {
     body.text = { format: { type: "json_object" } };
+  }
+
+  if (!shouldOmitTemperatureForModel(model)) {
+    body.temperature = normalizeTemperature(temperature);
   }
 
   return body;
@@ -1226,7 +1258,11 @@ app.get("/api/health", (_req, res) => {
       premium_provider: ZENTRA_PREMIUM_PROVIDER,
       premium_model: ZENTRA_PREMIUM_MODEL,
       premium_final_provider: ZENTRA_PREMIUM_FINAL_PROVIDER,
-      premium_final_model: ZENTRA_PREMIUM_FINAL_MODEL
+      premium_final_model: ZENTRA_PREMIUM_FINAL_MODEL,
+      executive_refiner_enabled: ZENTRA_EXECUTIVE_REFINER_ENABLED,
+      executive_refiner_provider: ZENTRA_EXECUTIVE_REFINER_PROVIDER,
+      executive_refiner_model: ZENTRA_EXECUTIVE_REFINER_MODEL,
+      executive_refiner_max_tokens: ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS
     }
   });
 });
