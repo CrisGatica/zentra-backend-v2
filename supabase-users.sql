@@ -10,6 +10,13 @@ create table if not exists public.users (
   audits_used integer not null default 0,
   premium_chat_used integer not null default 0,
   premium_pdf_used integer not null default 0,
+  extra_actions_balance integer not null default 0,
+  extra_audits_balance integer not null default 0,
+  extra_actions_used_cycle integer not null default 0,
+  extra_audits_used_cycle integer not null default 0,
+  extra_actions_purchased_total integer not null default 0,
+  extra_audits_purchased_total integer not null default 0,
+  purchase_history jsonb not null default '[]'::jsonb,
   billing_cycle_start bigint not null default (floor(extract(epoch from now()) * 1000))::bigint,
   updated_at timestamptz not null default now()
 );
@@ -24,6 +31,13 @@ alter table public.users
   add column if not exists audits_used integer not null default 0,
   add column if not exists premium_chat_used integer not null default 0,
   add column if not exists premium_pdf_used integer not null default 0,
+  add column if not exists extra_actions_balance integer not null default 0,
+  add column if not exists extra_audits_balance integer not null default 0,
+  add column if not exists extra_actions_used_cycle integer not null default 0,
+  add column if not exists extra_audits_used_cycle integer not null default 0,
+  add column if not exists extra_actions_purchased_total integer not null default 0,
+  add column if not exists extra_audits_purchased_total integer not null default 0,
+  add column if not exists purchase_history jsonb not null default '[]'::jsonb,
   add column if not exists billing_cycle_start bigint not null default (floor(extract(epoch from now()) * 1000))::bigint;
 
 do $$

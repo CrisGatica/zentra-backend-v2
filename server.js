@@ -26,6 +26,21 @@ const ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS = Math.max(
   normalizeCounterValue(process.env.ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS || 900) || 900
 );
 const ZENTRA_EXECUTIVE_REFINER_TEMPERATURE = normalizeTemperature(process.env.ZENTRA_EXECUTIVE_REFINER_TEMPERATURE || 0.2);
+const ZENTRA_CHAT_FAST_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_FAST_PROVIDER || ZENTRA_BASE_PROVIDER);
+const ZENTRA_CHAT_FAST_MODEL = process.env.ZENTRA_CHAT_FAST_MODEL || ZENTRA_BASE_MODEL;
+const ZENTRA_CHAT_REASONING_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_REASONING_PROVIDER || ZENTRA_PREMIUM_PROVIDER);
+const ZENTRA_CHAT_REASONING_MODEL = process.env.ZENTRA_CHAT_REASONING_MODEL || "gpt-5-mini";
+const ZENTRA_CHAT_REASONING_MAX_TOKENS = Math.max(
+  512,
+  normalizeCounterValue(process.env.ZENTRA_CHAT_REASONING_MAX_TOKENS || 1800) || 1800
+);
+const ZENTRA_CHAT_EXECUTIVE_ENABLED = String(process.env.ZENTRA_CHAT_EXECUTIVE_ENABLED || "false").trim().toLowerCase() !== "false";
+const ZENTRA_CHAT_EXECUTIVE_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_EXECUTIVE_PROVIDER || ZENTRA_PREMIUM_FINAL_PROVIDER);
+const ZENTRA_CHAT_EXECUTIVE_MODEL = process.env.ZENTRA_CHAT_EXECUTIVE_MODEL || "gpt-5";
+const ZENTRA_CHAT_EXECUTIVE_MAX_TOKENS = Math.max(
+  256,
+  normalizeCounterValue(process.env.ZENTRA_CHAT_EXECUTIVE_MAX_TOKENS || 1200) || 1200
+);
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: {
@@ -71,26 +86,26 @@ const TEMP_UNLIMITED_AGENCY_EMAILS = new Set([
 
 const AI_TASK_ROUTING = {
   chat_basic: {
-    provider: ZENTRA_BASE_PROVIDER,
-    model: ZENTRA_BASE_MODEL,
+    provider: ZENTRA_CHAT_FAST_PROVIDER,
+    model: ZENTRA_CHAT_FAST_MODEL,
     premium: false,
     maxTokens: 4096
   },
   chat_image_ocr: {
-    provider: ZENTRA_BASE_PROVIDER,
-    model: ZENTRA_BASE_MODEL,
+    provider: ZENTRA_CHAT_FAST_PROVIDER,
+    model: ZENTRA_CHAT_FAST_MODEL,
     premium: false,
     maxTokens: 4096
   },
   chat_premium: {
-    provider: ZENTRA_PREMIUM_PROVIDER,
-    model: ZENTRA_PREMIUM_MODEL,
-    fallbackProvider: ZENTRA_BASE_PROVIDER,
-    fallbackModel: ZENTRA_BASE_MODEL,
+    provider: ZENTRA_CHAT_REASONING_PROVIDER,
+    model: ZENTRA_CHAT_REASONING_MODEL,
+    fallbackProvider: ZENTRA_CHAT_FAST_PROVIDER,
+    fallbackModel: ZENTRA_CHAT_FAST_MODEL,
     premium: true,
     counterKey: "premium_chat_used",
     allowedPlans: ["free", "starter", "pro", "agency"],
-    maxTokens: 4096
+    maxTokens: ZENTRA_CHAT_REASONING_MAX_TOKENS
   },
   seo_analysis: {
     provider: ZENTRA_BASE_PROVIDER,
@@ -177,6 +192,52 @@ const LEMON_VARIANT_MAP = {
   "1605330": { plan: "pro", plan_type: "audit" },
   "1605342": { plan: "agency", plan_type: "audit" }
 };
+
+function normalizeCapacityPackRecord(rawPack = {}, index = 0) {
+  const packId = String(rawPack.packId || rawPack.id || `agency-pack-${index + 1}`).trim();
+  const lemonCheckoutUrl = String(rawPack.lemonCheckoutUrl || rawPack.checkoutUrl || rawPack.url || "").trim();
+  const extraActions = normalizeCounterValue(rawPack.extraActions || rawPack.actions || 0);
+  const extraAudits = normalizeCounterValue(rawPack.extraAudits || rawPack.audits || 0);
+  const productIds = Array.isArray(rawPack.productIds)
+    ? rawPack.productIds.map((value) => normalizeLemonId(value)).filter(Boolean)
+    : (rawPack.productId ? [normalizeLemonId(rawPack.productId)] : []);
+  const variantIds = Array.isArray(rawPack.variantIds)
+    ? rawPack.variantIds.map((value) => normalizeLemonId(value)).filter(Boolean)
+    : (rawPack.variantId ? [normalizeLemonId(rawPack.variantId)] : []);
+  const label = String(rawPack.label || `+${extraAudits} auditorias +${extraActions} acciones`).trim();
+
+  if (!packId || !lemonCheckoutUrl || (!extraActions && !extraAudits)) {
+    return null;
+  }
+
+  return {
+    packId,
+    label,
+    lemonCheckoutUrl,
+    extraActions,
+    extraAudits,
+    productIds,
+    variantIds
+  };
+}
+
+function parseAgencyCapacityPacksConfig() {
+  const rawConfig = String(process.env.ZENTRA_AGENCY_CAPACITY_PACKS_JSON || "").trim();
+  if (!rawConfig) return [];
+
+  try {
+    const parsed = JSON.parse(rawConfig);
+    const packs = Array.isArray(parsed) ? parsed : [];
+    return packs
+      .map((pack, index) => normalizeCapacityPackRecord(pack, index))
+      .filter(Boolean);
+  } catch (error) {
+    console.error("[capacity:packs] No se pudo parsear ZENTRA_AGENCY_CAPACITY_PACKS_JSON:", error);
+    return [];
+  }
+}
+
+const AGENCY_CAPACITY_PACKS = parseAgencyCapacityPacksConfig();
 
 function getSupabaseClient() {
   if (!supabase) {
@@ -301,7 +362,8 @@ function getPlanTypeFromChatRequest(req, routing = {}) {
   return value === "audit" ? "audit" : "subscription";
 }
 
-async function resolveAiRoutingForRequest(req) {
+async function resolveAiRoutingForRequest(req, options = {}) {
+  const { consumePremium = true } = options;
   const routing = req.body?.zentra_routing || {};
   const incomingTaskType = routing.taskType || req.body?.task_type || "chat_basic";
   const taskType = normalizeTaskType(incomingTaskType);
@@ -353,6 +415,7 @@ async function resolveAiRoutingForRequest(req) {
     fallbackModel: route.fallbackModel || ZENTRA_BASE_MODEL,
     maxTokens,
     premiumRequested: Boolean(routing.premiumActive || routing.premiumAllowed || route.premium),
+    premiumAvailable: false,
     premiumActive: false,
     premiumConsumed: false,
     counterKey: route.counterKey || null,
@@ -409,6 +472,19 @@ async function resolveAiRoutingForRequest(req) {
     };
   }
 
+  if (taskType === "chat_premium") {
+    return {
+      ...resolved,
+      provider: premiumProvider,
+      model: premiumModel,
+      premiumAvailable: true,
+      premiumActive: true,
+      premiumConsumed: false,
+      counterKey: null,
+      reason: "chat_premium_included"
+    };
+  }
+
   if (planType === "audit" && ["pdf_summary", "pdf_polish", "premium_reasoning_audit"].includes(taskType)) {
     if (hasUnlimitedAgencyOverride(email)) {
       const resolvedAuditPremium = {
@@ -416,6 +492,7 @@ async function resolveAiRoutingForRequest(req) {
         plan: "agency",
         provider: premiumProvider,
         model: premiumModel,
+        premiumAvailable: true,
         premiumActive: true,
         premiumConsumed: false,
         counterKey: null,
@@ -456,6 +533,7 @@ async function resolveAiRoutingForRequest(req) {
       plan,
       provider: premiumProvider,
       model: premiumModel,
+      premiumAvailable: true,
       premiumActive: true,
       premiumConsumed: false,
       counterKey: null,
@@ -488,6 +566,68 @@ async function resolveAiRoutingForRequest(req) {
     };
   }
 
+  if (!consumePremium) {
+    if (hasUnlimitedAgencyOverride(email)) {
+      const previewPremium = {
+        ...resolved,
+        plan,
+        provider: premiumProvider,
+        model: premiumModel,
+        premiumAvailable: true,
+        premiumActive: false,
+        premiumConsumed: false,
+        reason: "premium_available_unlimited_override"
+      };
+      logPdfFlow("resolve:premium_available_unlimited_override", {
+        provider: previewPremium.provider,
+        resolvedModel: previewPremium.model,
+        reason: previewPremium.reason,
+        plan
+      });
+      return previewPremium;
+    }
+
+    const usage = formatSubscriptionUsage(user);
+    const limitMap = {
+      premium_chat_used: usage.premium_chat_limit,
+      premium_pdf_used: usage.premium_pdf_limit
+    };
+    const currentUsed = normalizeCounterValue(user[route.counterKey]);
+    const limit = normalizeCounterValue(limitMap[route.counterKey]);
+
+    if (currentUsed >= limit) {
+      logPdfFlow("resolve:premium_limit_reached_preview", {
+        provider: resolved.provider,
+        resolvedModel: resolved.model,
+        reason: "premium_limit_reached",
+        plan
+      });
+      return {
+        ...resolved,
+        plan,
+        reason: "premium_limit_reached"
+      };
+    }
+
+    const previewPremium = {
+      ...resolved,
+      plan,
+      provider: premiumProvider,
+      model: premiumModel,
+      premiumAvailable: true,
+      premiumActive: false,
+      premiumConsumed: false,
+      reason: "premium_available"
+    };
+    logPdfFlow("resolve:premium_available", {
+      provider: previewPremium.provider,
+      resolvedModel: previewPremium.model,
+      reason: previewPremium.reason,
+      plan
+    });
+    return previewPremium;
+  }
+
   const premiumUsage = await consumeSubscriptionUsage(email, route.counterKey);
   if (!premiumUsage.allowed) {
     logPdfFlow("resolve:premium_limit_reached", {
@@ -508,6 +648,7 @@ async function resolveAiRoutingForRequest(req) {
     plan,
     provider: premiumProvider,
     model: premiumModel,
+    premiumAvailable: true,
     premiumActive: true,
     premiumConsumed: true,
     reason: "premium_authorized"
@@ -643,6 +784,70 @@ function extractLemonPaymentInfo(payload = {}, eventName = "") {
   };
 }
 
+function getAgencyCapacityPackByLemonIds({ productId = "", variantId = "" } = {}) {
+  const normalizedProductId = normalizeLemonId(productId);
+  const normalizedVariantId = normalizeLemonId(variantId);
+
+  return AGENCY_CAPACITY_PACKS.find((pack) =>
+    pack.variantIds.includes(normalizedVariantId) ||
+    pack.productIds.includes(normalizedProductId)
+  ) || null;
+}
+
+function serializeAgencyCapacityPack(pack = {}) {
+  return {
+    packId: pack.packId,
+    label: pack.label,
+    extraActions: normalizeCounterValue(pack.extraActions),
+    extraAudits: normalizeCounterValue(pack.extraAudits),
+    checkoutUrl: String(pack.lemonCheckoutUrl || "").trim()
+  };
+}
+
+async function grantSubscriptionCapacityUpgrade(paymentInfo = {}, pack = null) {
+  if (!pack || !paymentInfo.email) {
+    throw new Error("Capacity pack invalido");
+  }
+
+  const existingUser = await getUserByEmail(paymentInfo.email, "subscription");
+  const user = existingUser || getDefaultSubscriptionUser(paymentInfo.email);
+  const purchaseHistory = normalizePurchaseHistory(user.purchase_history);
+  const lemonOrderId = String(paymentInfo.lemon_id || "").trim();
+
+  if (lemonOrderId && purchaseHistory.some((entry) => String(entry?.lemonOrderId || "").trim() === lemonOrderId)) {
+    return upsertUserAccess({
+      ...user,
+      purchase_history: purchaseHistory
+    });
+  }
+
+  const nextHistory = [
+    {
+      packId: pack.packId,
+      extraActions: normalizeCounterValue(pack.extraActions),
+      extraAudits: normalizeCounterValue(pack.extraAudits),
+      purchasedAt: new Date().toISOString(),
+      lemonOrderId,
+      lemonProductId: paymentInfo.product_id || "",
+      lemonVariantId: paymentInfo.variant_id || ""
+    },
+    ...purchaseHistory
+  ].slice(0, 100);
+
+  return upsertUserAccess({
+    ...user,
+    email: paymentInfo.email,
+    plan: user.plan || paymentInfo.plan || "agency",
+    plan_type: "subscription",
+    status: user.status || "active",
+    extra_actions_balance: normalizeCounterValue(user.extra_actions_balance) + normalizeCounterValue(pack.extraActions),
+    extra_audits_balance: normalizeCounterValue(user.extra_audits_balance) + normalizeCounterValue(pack.extraAudits),
+    extra_actions_purchased_total: normalizeCounterValue(user.extra_actions_purchased_total) + normalizeCounterValue(pack.extraActions),
+    extra_audits_purchased_total: normalizeCounterValue(user.extra_audits_purchased_total) + normalizeCounterValue(pack.extraAudits),
+    purchase_history: nextHistory
+  });
+}
+
 function normalizeLemonStatus(status = "", eventName = "") {
   const value = String(status || "").toLowerCase();
 
@@ -697,6 +902,13 @@ async function upsertUserAccess(userData = {}) {
     audits_used: normalizeCounterValue(userData.audits_used),
     premium_chat_used: normalizeCounterValue(userData.premium_chat_used),
     premium_pdf_used: normalizeCounterValue(userData.premium_pdf_used),
+    extra_actions_balance: normalizeCounterValue(userData.extra_actions_balance),
+    extra_audits_balance: normalizeCounterValue(userData.extra_audits_balance),
+    extra_actions_used_cycle: normalizeCounterValue(userData.extra_actions_used_cycle),
+    extra_audits_used_cycle: normalizeCounterValue(userData.extra_audits_used_cycle),
+    extra_actions_purchased_total: normalizeCounterValue(userData.extra_actions_purchased_total),
+    extra_audits_purchased_total: normalizeCounterValue(userData.extra_audits_purchased_total),
+    purchase_history: normalizePurchaseHistory(userData.purchase_history),
     billing_cycle_start: normalizeCounterValue(userData.billing_cycle_start || Date.now()),
     updated_at: new Date().toISOString()
   };
@@ -706,7 +918,7 @@ async function upsertUserAccess(userData = {}) {
     .upsert(payload, {
       onConflict: "email,plan_type"
     })
-    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, billing_cycle_start, updated_at")
+    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, extra_actions_balance, extra_audits_balance, extra_actions_used_cycle, extra_audits_used_cycle, extra_actions_purchased_total, extra_audits_purchased_total, purchase_history, billing_cycle_start, updated_at")
     .single();
 
   if (error) {
@@ -720,7 +932,7 @@ async function getUserByEmail(email, planType = "subscription") {
   const client = getSupabaseClient();
   const { data, error } = await client
     .from("users")
-    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, billing_cycle_start, updated_at")
+    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, extra_actions_balance, extra_audits_balance, extra_actions_used_cycle, extra_audits_used_cycle, extra_actions_purchased_total, extra_audits_purchased_total, purchase_history, billing_cycle_start, updated_at")
     .eq("email", email)
     .eq("plan_type", planType)
     .maybeSingle();
@@ -744,8 +956,28 @@ function getDefaultSubscriptionUser(email = "") {
     audits_used: 0,
     premium_chat_used: 0,
     premium_pdf_used: 0,
+    extra_actions_balance: 0,
+    extra_audits_balance: 0,
+    extra_actions_used_cycle: 0,
+    extra_audits_used_cycle: 0,
+    extra_actions_purchased_total: 0,
+    extra_audits_purchased_total: 0,
+    purchase_history: [],
     billing_cycle_start: Date.now()
   };
+}
+
+function normalizePurchaseHistory(value = []) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+  return [];
 }
 
 function formatSubscriptionUsage(user = {}) {
@@ -775,6 +1007,17 @@ function formatSubscriptionUsage(user = {}) {
       premium_pdf_used: premiumPdfUsed,
       premium_pdf_limit: premiumPdfLimit,
       premium_pdf_remaining: Math.max(premiumPdfLimit - premiumPdfUsed, 0),
+      extra_actions_balance: TEMP_UNLIMITED_LIMIT,
+      extra_audits_balance: TEMP_UNLIMITED_LIMIT,
+      extra_actions_used_cycle: 0,
+      extra_audits_used_cycle: 0,
+      extra_actions_purchased_total: TEMP_UNLIMITED_LIMIT,
+      extra_audits_purchased_total: TEMP_UNLIMITED_LIMIT,
+      purchase_history: normalizePurchaseHistory(user.purchase_history),
+      totalActionsAfterUpgrade: actionsLimit,
+      totalAuditsAfterUpgrade: auditsLimit,
+      extraActionsPurchased: TEMP_UNLIMITED_LIMIT,
+      extraAuditsPurchased: TEMP_UNLIMITED_LIMIT,
       billing_cycle_start: normalizeCounterValue(user.billing_cycle_start || Date.now()),
       unlimited_agency: true
     };
@@ -783,27 +1026,52 @@ function formatSubscriptionUsage(user = {}) {
   const plan = normalizePlan(user.plan);
   const limits = getPlanLimits(plan);
   const premiumLimits = getPremiumLimits(plan);
-  const actionsUsed = normalizeCounterValue(user.actions_used);
-  const auditsUsed = normalizeCounterValue(user.audits_used);
+  const baseActionsUsed = normalizeCounterValue(user.actions_used);
+  const baseAuditsUsed = normalizeCounterValue(user.audits_used);
   const premiumChatUsed = normalizeCounterValue(user.premium_chat_used);
   const premiumPdfUsed = normalizeCounterValue(user.premium_pdf_used);
+  const extraActionsBalance = normalizeCounterValue(user.extra_actions_balance);
+  const extraAuditsBalance = normalizeCounterValue(user.extra_audits_balance);
+  const extraActionsUsedCycle = normalizeCounterValue(user.extra_actions_used_cycle);
+  const extraAuditsUsedCycle = normalizeCounterValue(user.extra_audits_used_cycle);
+  const extraActionsPurchasedTotal = normalizeCounterValue(user.extra_actions_purchased_total);
+  const extraAuditsPurchasedTotal = normalizeCounterValue(user.extra_audits_purchased_total);
+  const actionsLimit = limits.actions + extraActionsBalance + extraActionsUsedCycle;
+  const auditsLimit = limits.audits + extraAuditsBalance + extraAuditsUsedCycle;
+  const actionsUsed = baseActionsUsed + extraActionsUsedCycle;
+  const auditsUsed = baseAuditsUsed + extraAuditsUsedCycle;
 
   return {
     plan,
     plan_type: "subscription",
     status: user.status || "active",
     actions_used: actionsUsed,
-    actions_limit: limits.actions,
-    actions_remaining: Math.max(limits.actions - actionsUsed, 0),
+    actions_limit: actionsLimit,
+    actions_remaining: Math.max(actionsLimit - actionsUsed, 0),
     audits_used: auditsUsed,
-    audits_limit: limits.audits,
-    audits_remaining: Math.max(limits.audits - auditsUsed, 0),
+    audits_limit: auditsLimit,
+    audits_remaining: Math.max(auditsLimit - auditsUsed, 0),
     premium_chat_used: premiumChatUsed,
     premium_chat_limit: premiumLimits.premium_chat_used,
     premium_chat_remaining: Math.max(premiumLimits.premium_chat_used - premiumChatUsed, 0),
     premium_pdf_used: premiumPdfUsed,
     premium_pdf_limit: premiumLimits.premium_pdf_used,
     premium_pdf_remaining: Math.max(premiumLimits.premium_pdf_used - premiumPdfUsed, 0),
+    base_actions_limit: limits.actions,
+    base_actions_used: baseActionsUsed,
+    base_audits_limit: limits.audits,
+    base_audits_used: baseAuditsUsed,
+    extra_actions_balance: extraActionsBalance,
+    extra_audits_balance: extraAuditsBalance,
+    extra_actions_used_cycle: extraActionsUsedCycle,
+    extra_audits_used_cycle: extraAuditsUsedCycle,
+    extra_actions_purchased_total: extraActionsPurchasedTotal,
+    extra_audits_purchased_total: extraAuditsPurchasedTotal,
+    purchase_history: normalizePurchaseHistory(user.purchase_history),
+    totalActionsAfterUpgrade: actionsLimit,
+    totalAuditsAfterUpgrade: auditsLimit,
+    extraActionsPurchased: extraActionsPurchasedTotal,
+    extraAuditsPurchased: extraAuditsPurchasedTotal,
     billing_cycle_start: normalizeCounterValue(user.billing_cycle_start || Date.now())
   };
 }
@@ -834,6 +1102,8 @@ async function ensureFreshSubscriptionUsage(email) {
       audits_used: 0,
       premium_chat_used: 0,
       premium_pdf_used: 0,
+      extra_actions_used_cycle: 0,
+      extra_audits_used_cycle: 0,
       billing_cycle_start: Date.now()
     });
   }
@@ -869,29 +1139,65 @@ async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
   }
 
   const usage = formatSubscriptionUsage(user);
+  const baseActionsLimit = normalizeCounterValue(usage.base_actions_limit);
+  const baseAuditsLimit = normalizeCounterValue(usage.base_audits_limit);
+  const currentBaseActionsUsed = normalizeCounterValue(user.actions_used);
+  const currentBaseAuditsUsed = normalizeCounterValue(user.audits_used);
+  const currentExtraActionsBalance = normalizeCounterValue(user.extra_actions_balance);
+  const currentExtraAuditsBalance = normalizeCounterValue(user.extra_audits_balance);
+  const currentExtraActionsUsedCycle = normalizeCounterValue(user.extra_actions_used_cycle);
+  const currentExtraAuditsUsedCycle = normalizeCounterValue(user.extra_audits_used_cycle);
+  const currentUsed = normalizeCounterValue(user[counterKey]);
   const limitMap = {
-    actions_used: usage.actions_limit,
-    audits_used: usage.audits_limit,
     premium_chat_used: usage.premium_chat_limit,
     premium_pdf_used: usage.premium_pdf_limit
   };
-  const currentUsed = normalizeCounterValue(user[counterKey]);
-  const limit = normalizeCounterValue(limitMap[counterKey]);
 
-  if (currentUsed >= limit) {
-    return {
-      allowed: false,
-      reason: "usage_limit_reached",
-      user
-    };
-  }
-
-  const savedUser = await upsertUserAccess({
+  const nextUser = {
     ...user,
-    [counterKey]: currentUsed + 1,
     plan_type: "subscription",
     status: "active"
-  });
+  };
+
+  if (counterKey === "actions_used") {
+    if (currentBaseActionsUsed < baseActionsLimit) {
+      nextUser.actions_used = currentBaseActionsUsed + 1;
+    } else if (currentExtraActionsBalance > 0) {
+      nextUser.extra_actions_balance = currentExtraActionsBalance - 1;
+      nextUser.extra_actions_used_cycle = currentExtraActionsUsedCycle + 1;
+    } else {
+      return {
+        allowed: false,
+        reason: "usage_limit_reached",
+        user
+      };
+    }
+  } else if (counterKey === "audits_used") {
+    if (currentBaseAuditsUsed < baseAuditsLimit) {
+      nextUser.audits_used = currentBaseAuditsUsed + 1;
+    } else if (currentExtraAuditsBalance > 0) {
+      nextUser.extra_audits_balance = currentExtraAuditsBalance - 1;
+      nextUser.extra_audits_used_cycle = currentExtraAuditsUsedCycle + 1;
+    } else {
+      return {
+        allowed: false,
+        reason: "usage_limit_reached",
+        user
+      };
+    }
+  } else {
+    const limit = normalizeCounterValue(limitMap[counterKey]);
+    if (currentUsed >= limit) {
+      return {
+        allowed: false,
+        reason: "usage_limit_reached",
+        user
+      };
+    }
+    nextUser[counterKey] = currentUsed + 1;
+  }
+
+  const savedUser = await upsertUserAccess(nextUser);
 
   return {
     allowed: true,
@@ -1244,6 +1550,442 @@ async function callAiProvider({ provider, model, messages, responseFormat, tempe
   return callOpenAI({ model, messages, responseFormat, temperature, maxTokens });
 }
 
+function sanitizeChatMessages(messages = []) {
+  return messages.map((msg, index) => {
+    const isLastMessage = index === messages.length - 1;
+
+    if (Array.isArray(msg?.content)) {
+      return {
+        ...msg,
+        content: msg.content.map((item) => {
+          if (item?.type === "image_url") {
+            if (isLastMessage) {
+              return item;
+            }
+
+            return {
+              type: "text",
+              text: "[imagen omitida del historial]"
+            };
+          }
+
+          return item;
+        })
+      };
+    }
+
+    return msg;
+  });
+}
+
+function buildJsonControlMessage(text = "Responde SOLO en JSON valido. Sin texto extra.") {
+  return {
+    role: "system",
+    content: [
+      {
+        type: "text",
+        text
+      }
+    ]
+  };
+}
+
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "si", "yes", "1", "ok"].includes(normalized)) return true;
+    if (["false", "no", "0"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
+function normalizeStringArray(values = []) {
+  const source = Array.isArray(values) ? values : [values];
+  return source
+    .map((value) => {
+      if (typeof value === "string") return value.trim();
+      if (value && typeof value === "object") {
+        return firstNonEmptyString(value.text, value.label, value.title, value.name);
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function looksLikeJsonText(text = "") {
+  const normalized = String(text || "").trim();
+  if (!normalized) return false;
+  return (
+    (normalized.startsWith("{") && normalized.endsWith("}"))
+    || (normalized.startsWith("[") && normalized.endsWith("]"))
+  );
+}
+
+function normalizeComparableText(text = "") {
+  return String(text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function isMeaningfullyDifferentText(nextText = "", previousText = "") {
+  const nextNormalized = normalizeComparableText(nextText);
+  const previousNormalized = normalizeComparableText(previousText);
+
+  if (!nextNormalized && !previousNormalized) return false;
+  if (!nextNormalized || !previousNormalized) return true;
+  if (nextNormalized === previousNormalized) return false;
+  if (Math.abs(nextNormalized.length - previousNormalized.length) >= 24) return true;
+
+  return !nextNormalized.includes(previousNormalized) && !previousNormalized.includes(nextNormalized);
+}
+
+function normalizeChatFastLayerPayload(payload = {}, fallbackText = "") {
+  const safeFallback = looksLikeJsonText(fallbackText) ? "" : String(fallbackText || "").trim();
+  return {
+    intent: firstNonEmptyString(payload.intent, payload.intencion, payload.task_intent, "general"),
+    visibleSignals: normalizeStringArray(
+      payload.visible_signals
+      || payload.visibleSignals
+      || payload.senales_visibles
+      || payload.signals
+    ),
+    response: firstNonEmptyString(
+      payload.response,
+      payload.respuesta,
+      payload.reply,
+      payload.reply_text,
+      payload.text,
+      safeFallback
+    ),
+    needsReasoning: normalizeBoolean(
+      payload.needs_reasoning
+      ?? payload.needsReasoning
+      ?? payload.reasoning_needed
+      ?? payload.requiere_razonamiento,
+      false
+    ),
+    reasoningGoal: firstNonEmptyString(
+      payload.reasoning_goal,
+      payload.reasoningGoal,
+      payload.objetivo_razonamiento
+    ),
+    shouldPolish: normalizeBoolean(
+      payload.should_polish
+      ?? payload.shouldPolish
+      ?? payload.polish_recommended,
+      false
+    ),
+    polishGoal: firstNonEmptyString(
+      payload.polish_goal,
+      payload.polishGoal,
+      payload.objetivo_pulido
+    )
+  };
+}
+
+function normalizeChatReasoningLayerPayload(payload = {}, fallbackText = "") {
+  const safeFallback = looksLikeJsonText(fallbackText) ? "" : String(fallbackText || "").trim();
+  return {
+    response: firstNonEmptyString(
+      payload.response,
+      payload.respuesta,
+      payload.reply,
+      payload.reply_text,
+      payload.text,
+      safeFallback
+    ),
+    reasoningAddedValue: normalizeBoolean(
+      payload.reasoning_added_value
+      ?? payload.reasoningAddedValue
+      ?? payload.added_value
+      ?? payload.aporta_valor,
+      true
+    ),
+    reasoningSummary: firstNonEmptyString(
+      payload.reasoning_summary,
+      payload.reasoningSummary,
+      payload.razonamiento,
+      payload.summary
+    ),
+    polishRecommended: normalizeBoolean(
+      payload.polish_recommended
+      ?? payload.polishRecommended
+      ?? payload.should_polish,
+      false
+    ),
+    polishGoal: firstNonEmptyString(
+      payload.polish_goal,
+      payload.polishGoal,
+      payload.objetivo_pulido
+    )
+  };
+}
+
+function normalizeChatExecutiveLayerPayload(payload = {}, fallbackText = "") {
+  const safeFallback = looksLikeJsonText(fallbackText) ? "" : String(fallbackText || "").trim();
+  return {
+    response: firstNonEmptyString(
+      payload.response,
+      payload.respuesta,
+      payload.reply,
+      payload.reply_text,
+      payload.text,
+      safeFallback
+    ),
+    changed: normalizeBoolean(
+      payload.changed
+      ?? payload.did_change
+      ?? payload.cambio_real,
+      true
+    ),
+    changeReason: firstNonEmptyString(
+      payload.change_reason,
+      payload.changeReason,
+      payload.razon_del_cambio,
+      payload.why
+    )
+  };
+}
+
+function compactChatLayerForPrompt(layer = {}) {
+  return JSON.stringify({
+    intent: layer.intent || "",
+    visibleSignals: normalizeStringArray(layer.visibleSignals || []),
+    response: firstNonEmptyString(layer.response),
+    needsReasoning: Boolean(layer.needsReasoning),
+    reasoningGoal: firstNonEmptyString(layer.reasoningGoal),
+    shouldPolish: Boolean(layer.shouldPolish || layer.polishRecommended),
+    polishGoal: firstNonEmptyString(layer.polishGoal),
+    reasoningSummary: firstNonEmptyString(layer.reasoningSummary)
+  });
+}
+
+function buildLayeredChatFastInstruction() {
+  return [
+    "Sos la CAPA 1 del chat de Zentra.",
+    "Objetivo: dar una respuesta inicial util, rapida y natural sin esperar razonamiento profundo.",
+    "Tareas:",
+    "- detectar la intencion real del usuario",
+    "- leer senales visibles del contexto ya disponible",
+    "- responder como un operador senior: humano, directo, claro y sin sonar a chatbot generico",
+    "- marcar si vale la pena activar una capa de razonamiento premium despues",
+    "",
+    "Reglas:",
+    "- no uses encabezados roboticos",
+    "- no llenes de teoria",
+    "- si el usuario pidio accion, da una primera accion o lectura concreta",
+    "- si el pedido es complejo, igual entrega una primera respuesta util y deja la profundidad para despues",
+    "",
+    "Responde SOLO en JSON valido con este esquema exacto:",
+    "{",
+    '  "intent": "string",',
+    '  "visible_signals": ["string"],',
+    '  "response": "respuesta inicial lista para mostrar al usuario",',
+    '  "needs_reasoning": true,',
+    '  "reasoning_goal": "string",',
+    '  "should_polish": false,',
+    '  "polish_goal": "string"',
+    "}"
+  ].join("\n");
+}
+
+function buildLayeredChatReasoningInstruction(fastLayer = {}) {
+  return [
+    "Sos la CAPA 2 del chat de Zentra.",
+    "Tu trabajo es mejorar la respuesta inicial solo si agregas criterio real.",
+    "Foco:",
+    "- priorizacion",
+    "- comparacion",
+    "- estrategia contextual",
+    "- claridad de decision",
+    "",
+    "No conviertas la respuesta en un informe pesado.",
+    "No repitas la capa 1 si no sumas nada.",
+    "Manten tono humano, directo y operador senior.",
+    "",
+    `Resultado de capa 1: ${compactChatLayerForPrompt(fastLayer)}`,
+    "",
+    "Responde SOLO en JSON valido con este esquema exacto:",
+    "{",
+    '  "response": "respuesta mejorada para el usuario",',
+    '  "reasoning_added_value": true,',
+    '  "reasoning_summary": "que valor nuevo agregaste",',
+    '  "polish_recommended": false,',
+    '  "polish_goal": "string"',
+    "}"
+  ].join("\n");
+}
+
+function buildLayeredChatExecutiveInstruction(fastLayer = {}, reasoningLayer = {}) {
+  return [
+    "Sos la CAPA 3 del chat de Zentra.",
+    "Tu trabajo es pulir la respuesta final solo si ganas claridad, ritmo o criterio ejecutivo.",
+    "No agregues datos nuevos no respaldados.",
+    "No vuelvas la respuesta mas larga por defecto.",
+    "No repitas encabezados ni estructura innecesaria.",
+    "Debe sonar premium, pero ligera.",
+    "",
+    `Capa 1: ${compactChatLayerForPrompt(fastLayer)}`,
+    `Capa 2: ${compactChatLayerForPrompt(reasoningLayer)}`,
+    "",
+    "Responde SOLO en JSON valido con este esquema exacto:",
+    "{",
+    '  "response": "respuesta final pulida",',
+    '  "changed": true,',
+    '  "change_reason": "por que el pulido si aporto claridad"',
+    "}"
+  ].join("\n");
+}
+
+function sumAiUsage(usages = []) {
+  const validUsages = usages.filter((usage) => usage && typeof usage === "object");
+  if (!validUsages.length) return undefined;
+
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let totalTokens = 0;
+  let hasPromptTokens = false;
+  let hasCompletionTokens = false;
+  let hasTotalTokens = false;
+
+  validUsages.forEach((usage) => {
+    const prompt = Number(usage.prompt_tokens);
+    const completion = Number(usage.completion_tokens);
+    const total = Number(usage.total_tokens);
+
+    if (Number.isFinite(prompt)) {
+      promptTokens += prompt;
+      hasPromptTokens = true;
+    }
+
+    if (Number.isFinite(completion)) {
+      completionTokens += completion;
+      hasCompletionTokens = true;
+    }
+
+    if (Number.isFinite(total)) {
+      totalTokens += total;
+      hasTotalTokens = true;
+    }
+  });
+
+  return {
+    prompt_tokens: hasPromptTokens ? promptTokens : undefined,
+    completion_tokens: hasCompletionTokens ? completionTokens : undefined,
+    total_tokens: hasTotalTokens
+      ? totalTokens
+      : (hasPromptTokens || hasCompletionTokens ? promptTokens + completionTokens : undefined),
+    layers: validUsages
+  };
+}
+
+function shouldAttemptExecutiveChatPolish(fastLayer = {}, reasoningLayer = {}) {
+  if (!ZENTRA_CHAT_EXECUTIVE_ENABLED) return false;
+  if (!isProviderConfigured(ZENTRA_CHAT_EXECUTIVE_PROVIDER)) return false;
+  if (!ZENTRA_CHAT_EXECUTIVE_MODEL) return false;
+
+  const candidateText = firstNonEmptyString(reasoningLayer.response);
+  if (!candidateText || candidateText.length < 90) return false;
+
+  return Boolean(
+    reasoningLayer.polishRecommended
+    || fastLayer.shouldPolish
+    || firstNonEmptyString(reasoningLayer.polishGoal, fastLayer.polishGoal)
+  );
+}
+
+function buildChatExecutiveRoute(reasoningRoute = {}) {
+  return {
+    taskType: "chat_executive",
+    provider: ZENTRA_CHAT_EXECUTIVE_PROVIDER,
+    model: ZENTRA_CHAT_EXECUTIVE_MODEL,
+    fallbackProvider: reasoningRoute.provider || ZENTRA_CHAT_REASONING_PROVIDER,
+    fallbackModel: reasoningRoute.model || ZENTRA_CHAT_REASONING_MODEL,
+    maxTokens: ZENTRA_CHAT_EXECUTIVE_MAX_TOKENS
+  };
+}
+
+async function callLayeredChatStep({
+  route,
+  instruction,
+  cleanMessages,
+  temperature = 0.4,
+  maxTokens = 900,
+  responseFormat = { type: "json_object" }
+}) {
+  const layerMessages = [
+    buildJsonControlMessage(instruction),
+    ...cleanMessages
+  ];
+
+  let result = await callAiProvider({
+    provider: route.provider,
+    model: route.model,
+    messages: layerMessages,
+    responseFormat,
+    temperature,
+    maxTokens
+  });
+
+  let fallbackError = null;
+  let requestedProvider = route.provider;
+  let requestedModel = route.model;
+
+  if (
+    !result.ok
+    && route.fallbackModel
+    && route.fallbackProvider
+    && (route.fallbackModel !== route.model || route.fallbackProvider !== route.provider)
+  ) {
+    fallbackError = getAiErrorMessage(result);
+    result = await callAiProvider({
+      provider: route.fallbackProvider,
+      model: route.fallbackModel,
+      messages: layerMessages,
+      responseFormat,
+      temperature,
+      maxTokens
+    });
+    requestedProvider = route.fallbackProvider;
+    requestedModel = route.fallbackModel;
+  }
+
+  const content = result.ok ? getAiResponseText(result) : "";
+
+  return {
+    ok: result.ok,
+    status: result.status,
+    error: result.ok ? null : getAiErrorMessage(result),
+    content,
+    parsed: result.ok ? parseJsonSafely(content) : {},
+    usage: result.ok ? getAiUsage(result) : undefined,
+    provider: result.provider || requestedProvider,
+    model: result.model || requestedModel,
+    requestedProvider: route.provider,
+    requestedModel: route.model,
+    fallbackError,
+    raw: result
+  };
+}
+
+function writeNdjsonEvent(res, payload = {}) {
+  res.write(`${JSON.stringify(payload)}\n`);
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
@@ -1287,6 +2029,10 @@ app.post("/api/lemon/webhook", async (req, res) => {
     }
 
     const paymentInfo = extractLemonPaymentInfo(payload, eventName);
+    const capacityPack = getAgencyCapacityPackByLemonIds({
+      productId: paymentInfo.product_id,
+      variantId: paymentInfo.variant_id
+    });
 
     if (!paymentInfo.email) {
       console.warn(`[lemon:webhook] Evento ${eventName} sin email`, {
@@ -1294,6 +2040,23 @@ app.post("/api/lemon/webhook", async (req, res) => {
         product: paymentInfo.product_label
       });
       return res.status(400).json({ error: "Webhook sin email de usuario" });
+    }
+
+    if (eventName === "order_created" && capacityPack) {
+      const savedUser = await grantSubscriptionCapacityUpgrade(paymentInfo, capacityPack);
+      console.log("[lemon:webhook] Expansion de capacidad sincronizada", {
+        email: savedUser.email,
+        packId: capacityPack.packId,
+        extraActions: capacityPack.extraActions,
+        extraAudits: capacityPack.extraAudits
+      });
+
+      return res.status(200).json({
+        success: true,
+        event: eventName,
+        packId: capacityPack.packId,
+        user: savedUser
+      });
     }
 
     if (paymentInfo.plan === "free") {
@@ -1340,6 +2103,13 @@ app.post("/api/lemon/webhook", async (req, res) => {
       audits_used: Number(existingUser?.audits_used || 0),
       premium_chat_used: Number(existingUser?.premium_chat_used || 0),
       premium_pdf_used: Number(existingUser?.premium_pdf_used || 0),
+      extra_actions_balance: Number(existingUser?.extra_actions_balance || 0),
+      extra_audits_balance: Number(existingUser?.extra_audits_balance || 0),
+      extra_actions_used_cycle: Number(existingUser?.extra_actions_used_cycle || 0),
+      extra_audits_used_cycle: Number(existingUser?.extra_audits_used_cycle || 0),
+      extra_actions_purchased_total: Number(existingUser?.extra_actions_purchased_total || 0),
+      extra_audits_purchased_total: Number(existingUser?.extra_audits_purchased_total || 0),
+      purchase_history: normalizePurchaseHistory(existingUser?.purchase_history),
       billing_cycle_start: Number(existingUser?.billing_cycle_start || Date.now())
     });
 
@@ -1415,6 +2185,13 @@ app.get("/api/user", async (req, res) => {
         premium_pdf_used: 0,
         premium_pdf_limit: 0,
         premium_pdf_remaining: 0,
+        extra_actions_balance: 0,
+        extra_audits_balance: 0,
+        extra_actions_used_cycle: 0,
+        extra_audits_used_cycle: 0,
+        extra_actions_purchased_total: 0,
+        extra_audits_purchased_total: 0,
+        purchase_history: [],
         billing_cycle_start: Date.now(),
         audit_credits: 0,
         audit_credits_used: 0,
@@ -1485,6 +2262,33 @@ app.get("/api/subscription/usage", async (req, res) => {
   } catch (error) {
     console.error("[api:subscription:usage] Error consultando consumo:", error);
     return res.status(500).json({ error: "Error consultando consumo de suscripcion" });
+  }
+});
+
+app.get("/api/subscription/capacity/offers", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.query.email);
+
+    if (!email) {
+      return res.status(400).json({ error: "email es requerido" });
+    }
+
+    const user = await ensureFreshSubscriptionUsage(email);
+    const usage = formatSubscriptionUsage(user || getDefaultSubscriptionUser(email));
+    const isAgency = normalizePlan(user?.plan || "free") === "agency" && String(user?.status || "active") === "active";
+    const offers = isAgency
+      ? AGENCY_CAPACITY_PACKS.map((pack) => serializeAgencyCapacityPack(pack))
+      : [];
+
+    return res.json({
+      available: offers.length > 0,
+      eligible: isAgency,
+      plan: normalizePlan(user?.plan || "free"),
+      offers
+    });
+  } catch (error) {
+    console.error("[api:subscription:capacity:offers] Error consultando ofertas:", error);
+    return res.status(500).json({ error: "Error consultando expansiones de capacidad" });
   }
 });
 
@@ -1563,6 +2367,385 @@ app.post("/api/audit/consume", async (req, res) => {
   }
 });
 
+app.post("/api/chat/stream", async (req, res) => {
+  let streamOpened = false;
+  let clientClosed = false;
+
+  req.on("close", () => {
+    clientClosed = true;
+  });
+
+  const openStream = () => {
+    if (streamOpened) return;
+
+    res.status(200);
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+
+    if (typeof res.flushHeaders === "function") {
+      res.flushHeaders();
+    }
+
+    streamOpened = true;
+  };
+
+  const pushEvent = (payload = {}) => {
+    if (clientClosed || res.writableEnded) return false;
+    openStream();
+    writeNdjsonEvent(res, payload);
+    return true;
+  };
+
+  const closeStream = () => {
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+
+  try {
+    const {
+      messages = [],
+      temperature = 0.7,
+      response_format
+    } = req.body || {};
+
+    const incomingRouting = req.body?.zentra_routing || {};
+    const requestedTaskType = incomingRouting.taskType || req.body?.task_type || "chat_basic";
+    const taskType = normalizeTaskType(requestedTaskType);
+    const responseFormat = response_format || { type: "json_object" };
+    const cleanMessages = sanitizeChatMessages(messages);
+    const maxTokens = clampMaxTokens(req.body?.max_tokens || incomingRouting.maxTokens, taskType);
+    const requestedPremium = taskType === "chat_premium";
+    const premiumPreview = requestedPremium
+      ? await resolveAiRoutingForRequest(req, { consumePremium: false })
+      : {
+          taskType,
+          email: getEmailFromChatRequest(req, incomingRouting),
+          counterKey: null,
+          premiumAvailable: false,
+          premiumActive: false,
+          premiumConsumed: false,
+          reason: "premium_not_requested"
+        };
+
+    const fastRoute = {
+      taskType: "chat_basic",
+      provider: ZENTRA_CHAT_FAST_PROVIDER,
+      model: ZENTRA_CHAT_FAST_MODEL,
+      fallbackProvider: ZENTRA_BASE_PROVIDER,
+      fallbackModel: ZENTRA_BASE_MODEL,
+      maxTokens: Math.min(maxTokens, 1100)
+    };
+
+    pushEvent({
+      type: "status",
+      phase: "fast",
+      label: "Entendiendo",
+      message: "Leyendo contexto y armando una primera respuesta."
+    });
+
+    const fastStartedAt = Date.now();
+    const fastStep = await callLayeredChatStep({
+      route: fastRoute,
+      instruction: buildLayeredChatFastInstruction(),
+      cleanMessages,
+      temperature: 0.55,
+      maxTokens: fastRoute.maxTokens,
+      responseFormat
+    });
+
+    if (!fastStep.ok) {
+      throw new Error(fastStep.error || "No se pudo generar la respuesta inicial.");
+    }
+
+    const fastLayer = normalizeChatFastLayerPayload(fastStep.parsed, fastStep.content);
+    let finalText = firstNonEmptyString(fastLayer.response);
+
+    if (!finalText) {
+      throw new Error("La capa rapida no devolvio una respuesta util.");
+    }
+
+    const aggregatedUsages = [];
+    if (fastStep.usage) aggregatedUsages.push(fastStep.usage);
+
+    const layers = {
+      fast: {
+        success: true,
+        requestedModel: fastStep.requestedModel,
+        actualModel: fastStep.model,
+        provider: fastStep.provider,
+        inputTokens: Number(fastStep.usage?.prompt_tokens || 0) || null,
+        outputTokens: Number(fastStep.usage?.completion_tokens || 0) || null,
+        latencyMs: Date.now() - fastStartedAt,
+        intent: fastLayer.intent,
+        visibleSignals: fastLayer.visibleSignals
+      },
+      reasoning: null,
+      executive: null
+    };
+
+    let finalRouting = {
+      taskType,
+      provider: fastStep.provider,
+      model: fastStep.model,
+      premiumAvailable: Boolean(premiumPreview.premiumAvailable),
+      premiumActive: false,
+      premiumConsumed: false,
+      counterKey: premiumPreview.counterKey || null,
+      reason: requestedPremium && !premiumPreview.premiumAvailable
+        ? (premiumPreview.reason || "fast_layer_only")
+        : "fast_layer_only",
+      premiumFallbackError: null
+    };
+
+    pushEvent({
+      type: "layer",
+      phase: "fast",
+      text: finalText,
+      replace: true,
+      intent: fastLayer.intent,
+      visibleSignals: fastLayer.visibleSignals,
+      meta: {
+        provider: fastStep.provider,
+        model: fastStep.model,
+        latencyMs: layers.fast.latencyMs
+      }
+    });
+
+    const wantsReasoning = requestedPremium && Boolean(fastLayer.needsReasoning);
+    if (wantsReasoning && premiumPreview.premiumAvailable && !clientClosed) {
+      pushEvent({
+        type: "status",
+        phase: "reasoning",
+        label: "Refinando criterio",
+        message: "Priorizando y comparando antes de cerrar la respuesta."
+      });
+
+      let reasoningRouting = {
+        ...premiumPreview,
+        premiumActive: false,
+        premiumConsumed: false
+      };
+
+      if (reasoningRouting.counterKey && reasoningRouting.planType !== "audit") {
+        const premiumUsage = await consumeSubscriptionUsage(reasoningRouting.email, reasoningRouting.counterKey);
+        if (premiumUsage.allowed) {
+          reasoningRouting = {
+            ...reasoningRouting,
+            premiumAvailable: true,
+            premiumActive: true,
+            premiumConsumed: true,
+            reason: "premium_authorized"
+          };
+        } else {
+          reasoningRouting = {
+            ...reasoningRouting,
+            premiumAvailable: false,
+            premiumActive: false,
+            premiumConsumed: false,
+            reason: premiumUsage.reason || "premium_limit_reached"
+          };
+        }
+      } else {
+        reasoningRouting = {
+          ...reasoningRouting,
+          premiumAvailable: true,
+          premiumActive: true,
+          premiumConsumed: false
+        };
+      }
+
+      finalRouting = {
+        ...finalRouting,
+        taskType: reasoningRouting.taskType || taskType,
+        premiumAvailable: Boolean(reasoningRouting.premiumAvailable),
+        premiumActive: Boolean(reasoningRouting.premiumActive),
+        premiumConsumed: Boolean(reasoningRouting.premiumConsumed),
+        reason: reasoningRouting.reason || finalRouting.reason
+      };
+
+      if (reasoningRouting.premiumAvailable) {
+        const reasoningStartedAt = Date.now();
+        const reasoningStep = await callLayeredChatStep({
+          route: reasoningRouting,
+          instruction: buildLayeredChatReasoningInstruction(fastLayer),
+          cleanMessages,
+          temperature: 0.35,
+          maxTokens: Math.min(
+            reasoningRouting.maxTokens || ZENTRA_CHAT_REASONING_MAX_TOKENS,
+            ZENTRA_CHAT_REASONING_MAX_TOKENS
+          ),
+          responseFormat
+        });
+
+        finalRouting.premiumFallbackError = reasoningStep.fallbackError || null;
+
+        if (reasoningStep.ok) {
+          if (reasoningStep.usage) aggregatedUsages.push(reasoningStep.usage);
+
+          const reasoningLayer = normalizeChatReasoningLayerPayload(reasoningStep.parsed, reasoningStep.content);
+          const reasoningApplied = Boolean(reasoningLayer.response) && (
+            reasoningLayer.reasoningAddedValue
+            || isMeaningfullyDifferentText(reasoningLayer.response, finalText)
+          );
+
+          layers.reasoning = {
+            success: true,
+            requestedModel: reasoningStep.requestedModel,
+            actualModel: reasoningStep.model,
+            provider: reasoningStep.provider,
+            inputTokens: Number(reasoningStep.usage?.prompt_tokens || 0) || null,
+            outputTokens: Number(reasoningStep.usage?.completion_tokens || 0) || null,
+            latencyMs: Date.now() - reasoningStartedAt,
+            applied: reasoningApplied,
+            summary: reasoningLayer.reasoningSummary,
+            routingReason: reasoningRouting.reason || null,
+            routingTaskType: reasoningRouting.taskType || taskType,
+            routingModel: reasoningRouting.model || null,
+            routingPremiumActive: Boolean(reasoningRouting.premiumActive),
+            routingFallbackError: reasoningStep.fallbackError || null
+          };
+
+          finalRouting.provider = reasoningStep.provider;
+          finalRouting.model = reasoningStep.model;
+          finalRouting.reason = reasoningApplied ? "reasoning_applied" : "reasoning_kept_fast";
+
+          if (reasoningApplied) {
+            finalText = reasoningLayer.response;
+            pushEvent({
+              type: "layer",
+              phase: "reasoning",
+              text: finalText,
+              replace: true,
+              summary: reasoningLayer.reasoningSummary,
+              meta: {
+                provider: reasoningStep.provider,
+                model: reasoningStep.model,
+                latencyMs: layers.reasoning.latencyMs
+              }
+            });
+          }
+
+          if (shouldAttemptExecutiveChatPolish(fastLayer, reasoningLayer) && !clientClosed) {
+            pushEvent({
+              type: "status",
+              phase: "executive",
+              label: "Puliendo claridad",
+              message: "Ajustando el cierre final para que suene mas claro y senior."
+            });
+
+            const executiveRoute = buildChatExecutiveRoute(reasoningRouting);
+            const executiveStartedAt = Date.now();
+            const executiveStep = await callLayeredChatStep({
+              route: executiveRoute,
+              instruction: buildLayeredChatExecutiveInstruction(fastLayer, reasoningLayer),
+              cleanMessages,
+              temperature: 0.2,
+              maxTokens: executiveRoute.maxTokens,
+              responseFormat
+            });
+
+            if (executiveStep.ok) {
+              if (executiveStep.usage) aggregatedUsages.push(executiveStep.usage);
+
+              const executiveLayer = normalizeChatExecutiveLayerPayload(executiveStep.parsed, executiveStep.content);
+              const executiveApplied = Boolean(executiveLayer.response) && (
+                executiveLayer.changed
+                || isMeaningfullyDifferentText(executiveLayer.response, finalText)
+              );
+
+              layers.executive = {
+                success: true,
+                requestedModel: executiveStep.requestedModel,
+                actualModel: executiveStep.model,
+                provider: executiveStep.provider,
+                inputTokens: Number(executiveStep.usage?.prompt_tokens || 0) || null,
+                outputTokens: Number(executiveStep.usage?.completion_tokens || 0) || null,
+                latencyMs: Date.now() - executiveStartedAt,
+                applied: executiveApplied,
+                changeReason: executiveLayer.changeReason,
+                routingReason: finalRouting.reason,
+                routingTaskType: executiveRoute.taskType,
+                routingModel: executiveRoute.model,
+                routingPremiumActive: true,
+                routingFallbackError: executiveStep.fallbackError || null
+              };
+
+              if (executiveApplied) {
+                finalText = executiveLayer.response;
+                finalRouting.provider = executiveStep.provider;
+                finalRouting.model = executiveStep.model;
+                finalRouting.reason = "executive_polish_applied";
+                pushEvent({
+                  type: "layer",
+                  phase: "executive",
+                  text: finalText,
+                  replace: true,
+                  summary: executiveLayer.changeReason,
+                  meta: {
+                    provider: executiveStep.provider,
+                    model: executiveStep.model,
+                    latencyMs: layers.executive.latencyMs
+                  }
+                });
+              }
+            } else {
+              layers.executive = {
+                success: false,
+                error: executiveStep.error,
+                requestedModel: executiveStep.requestedModel,
+                actualModel: executiveStep.model,
+                provider: executiveStep.provider
+              };
+            }
+          }
+        } else {
+          layers.reasoning = {
+            success: false,
+            error: reasoningStep.error,
+            requestedModel: reasoningStep.requestedModel,
+            actualModel: reasoningStep.model,
+            provider: reasoningStep.provider,
+            routingReason: reasoningRouting.reason || null,
+            routingTaskType: reasoningRouting.taskType || taskType,
+            routingModel: reasoningRouting.model || null,
+            routingPremiumActive: Boolean(reasoningRouting.premiumActive),
+            routingFallbackError: reasoningStep.fallbackError || null
+          };
+          finalRouting.provider = fastStep.provider;
+          finalRouting.model = fastStep.model;
+          finalRouting.reason = "reasoning_failed_fast_kept";
+        }
+      }
+    }
+
+    const finalPayload = {
+      type: "final",
+      text: finalText,
+      usage: sumAiUsage(aggregatedUsages),
+      provider: finalRouting.provider,
+      model: finalRouting.model,
+      zentra_routing: finalRouting,
+      layers
+    };
+
+    pushEvent(finalPayload);
+    closeStream();
+  } catch (error) {
+    if (!streamOpened) {
+      return res.status(500).json({ error: "Error en el servidor" });
+    }
+
+    pushEvent({
+      type: "error",
+      message: error?.message || "Error en el servidor"
+    });
+    closeStream();
+  }
+});
+
 app.post("/api/chat", async (req, res) => {
   try {
     const {
@@ -1615,30 +2798,7 @@ app.post("/api/chat", async (req, res) => {
       reason: aiRouting.reason
     });
 
-    // Conservar solo la imagen del ultimo mensaje; las anteriores se reemplazan.
-    const cleanMessages = messages.map((msg, index) => {
-      const isLastMessage = index === messages.length - 1;
-
-      if (Array.isArray(msg.content)) {
-        return {
-          ...msg,
-          content: msg.content.map((item) => {
-            if (item.type === "image_url") {
-              if (isLastMessage) {
-                return item;
-              }
-
-              return {
-                type: "text",
-                text: "[imagen omitida del historial]"
-              };
-            }
-            return item;
-          })
-        };
-      }
-      return msg;
-    });
+    const cleanMessages = sanitizeChatMessages(messages);
 
     const providerMessages = [
       {
