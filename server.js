@@ -68,9 +68,9 @@ const SUPPORTED_LEMON_EVENTS = new Set([
 
 const PLAN_LIMITS = {
   free: { actions: 20, audits: 1 },
-  starter: { actions: 200, audits: 3 },
+  starter: { actions: 300, audits: 5 },
   pro: { actions: 800, audits: 10 },
-  agency: { actions: 2000, audits: 20 }
+  agency: { actions: 3000, audits: 30 }
 };
 
 const PREMIUM_LIMITS = {
@@ -163,35 +163,159 @@ const PDF_FLOW_TASKS = new Set([
 ]);
 let PREMIUM_AUDIT_ROUTE_HIT_COUNT = 0;
 
-const LEMON_PRODUCT_MAP = {
-  // Zentra AI SaaS - suscripciones mensuales y anuales
-  "990970": { plan: "starter", plan_type: "subscription" },
-  "1023400": { plan: "starter", plan_type: "subscription" },
-  "990993": { plan: "pro", plan_type: "subscription" },
-  "1023398": { plan: "pro", plan_type: "subscription" },
-  "990997": { plan: "agency", plan_type: "subscription" },
-  "1023395": { plan: "agency", plan_type: "subscription" },
-
-  // Zentra Audit - pago unico
-  "1023407": { plan: "starter", plan_type: "audit" },
-  "1023412": { plan: "pro", plan_type: "audit" },
-  "1023419": { plan: "agency", plan_type: "audit" }
+const LEMON_PRODUCTS = {
+  SAAS: {
+    starter_monthly: {
+      productId: 1073703,
+      variantId: 1683122,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/21aecf13-832a-491f-89fd-fd9b156caefd",
+      actions: 300,
+      audits: 5
+    },
+    starter_yearly: {
+      productId: 1073699,
+      variantId: 1683117,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/6f68c93e-3ed7-439b-afd0-eea51e2b539a",
+      actions: 300,
+      audits: 5
+    },
+    pro_monthly: {
+      productId: 1073694,
+      variantId: 1683111,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/eed650b0-8365-40a1-a09e-72eeb3692fc4",
+      actions: 800,
+      audits: 10
+    },
+    pro_yearly: {
+      productId: 1073685,
+      variantId: 1683097,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/83236d4b-ca5a-4ab9-b962-20ba32abba40",
+      actions: 800,
+      audits: 10
+    },
+    agency_monthly: {
+      productId: 1073671,
+      variantId: 1683071,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/a1505c0f-e6f2-45b0-8454-8185368da11d",
+      actions: 3000,
+      audits: 30
+    },
+    agency_yearly: {
+      productId: 1073676,
+      variantId: 1683081,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/3b8b9482-8cd2-49f3-b459-75fb267fab78",
+      actions: 3000,
+      audits: 30
+    }
+  },
+  AUDIT: {
+    auditStarter: {
+      productId: 1073733,
+      variantId: 1683161,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/05464642-b8eb-4fb8-ac8a-1e646531a502",
+      pages: 5
+    },
+    auditPro: {
+      productId: 1073731,
+      variantId: 1683159,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/2deb6b4e-04e6-4185-a9d5-03b5e720b3f8",
+      pages: 7
+    },
+    auditAgency: {
+      productId: 1023507,
+      variantId: 1605502,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/b925afce-d61a-4b54-9f21-5212a2451208",
+      pages: 11
+    }
+  },
+  EXTRAS: {
+    growth: {
+      productId: 1073777,
+      variantId: 1683224,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/35c0bd93-8328-441b-b085-0d095ffc3922",
+      actions: 300,
+      audits: 5,
+      price: 19
+    },
+    scale: {
+      productId: 1073780,
+      variantId: 1683227,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/493c4cd5-661a-4319-a001-b27da103376a",
+      actions: 700,
+      audits: 15,
+      price: 39
+    },
+    unlimited: {
+      productId: 1073781,
+      variantId: 1683228,
+      link: "https://tryzentra.lemonsqueezy.com/checkout/buy/922b0487-7962-448d-aaf1-ab0725d091c0",
+      actions: 1500,
+      audits: 30,
+      price: 59
+    }
+  }
 };
 
-const LEMON_VARIANT_MAP = {
-  // Zentra AI SaaS - suscripciones mensuales y anuales
-  "1554910": { plan: "starter", plan_type: "subscription" },
-  "1605313": { plan: "starter", plan_type: "subscription" },
-  "1554947": { plan: "pro", plan_type: "subscription" },
-  "1605311": { plan: "pro", plan_type: "subscription" },
-  "1554951": { plan: "agency", plan_type: "subscription" },
-  "1605308": { plan: "agency", plan_type: "subscription" },
+function getPlanFromLemonKey(productKey = "") {
+  const key = String(productKey || "").toLowerCase();
+  if (key.includes("agency")) return "agency";
+  if (key.includes("pro")) return "pro";
+  if (key.includes("starter")) return "starter";
+  return "free";
+}
 
-  // Zentra Audit - pago unico
-  "1605323": { plan: "starter", plan_type: "audit" },
-  "1605330": { plan: "pro", plan_type: "audit" },
-  "1605342": { plan: "agency", plan_type: "audit" }
-};
+function createLemonMapping(productFamily = "SAAS", productKey = "", config = {}) {
+  const family = String(productFamily || "SAAS").toUpperCase();
+  const isAudit = family === "AUDIT";
+  const isExtra = family === "EXTRAS";
+  const plan = isExtra ? "agency" : getPlanFromLemonKey(productKey);
+
+  return {
+    plan,
+    plan_type: isAudit ? "audit" : (isExtra ? "extra" : "subscription"),
+    product_key: productKey,
+    product_family: isAudit ? "audit" : (isExtra ? "extra" : "subscription"),
+    checkout_link: config.link || "",
+    actions: normalizeCounterValue(config.actions),
+    audits: normalizeCounterValue(config.audits),
+    pages: normalizeCounterValue(config.pages),
+    price: normalizeCounterValue(config.price)
+  };
+}
+
+function buildLemonMaps() {
+  const productMap = {};
+  const variantMap = {};
+
+  Object.entries(LEMON_PRODUCTS).forEach(([family, products]) => {
+    Object.entries(products || {}).forEach(([productKey, config]) => {
+      const mapping = createLemonMapping(family, productKey, config);
+      const productId = normalizeLemonId(config.productId);
+      const variantId = normalizeLemonId(config.variantId);
+
+      if (productId) productMap[productId] = mapping;
+      if (variantId) variantMap[variantId] = mapping;
+    });
+  });
+
+  return { productMap, variantMap };
+}
+
+function buildDefaultAgencyCapacityPacks() {
+  return Object.entries(LEMON_PRODUCTS.EXTRAS || {})
+    .map(([packId, config], index) => normalizeCapacityPackRecord({
+      packId,
+      label: `+${normalizeCounterValue(config.audits)} auditorias +${normalizeCounterValue(config.actions)} acciones`,
+      lemonCheckoutUrl: config.link,
+      extraActions: config.actions,
+      extraAudits: config.audits,
+      productId: config.productId,
+      variantId: config.variantId
+    }, index))
+    .filter(Boolean);
+}
+
+const { productMap: LEMON_PRODUCT_MAP, variantMap: LEMON_VARIANT_MAP } = buildLemonMaps();
 
 function normalizeCapacityPackRecord(rawPack = {}, index = 0) {
   const packId = String(rawPack.packId || rawPack.id || `agency-pack-${index + 1}`).trim();
@@ -237,7 +361,10 @@ function parseAgencyCapacityPacksConfig() {
   }
 }
 
-const AGENCY_CAPACITY_PACKS = parseAgencyCapacityPacksConfig();
+const DEFAULT_AGENCY_CAPACITY_PACKS = buildDefaultAgencyCapacityPacks();
+const AGENCY_CAPACITY_PACKS = DEFAULT_AGENCY_CAPACITY_PACKS.length
+  ? DEFAULT_AGENCY_CAPACITY_PACKS
+  : parseAgencyCapacityPacksConfig();
 
 function getSupabaseClient() {
   if (!supabase) {
@@ -700,6 +827,7 @@ function getLemonMapping({ productId = "", variantId = "" } = {}) {
 function getProductFamily(productName = "", eventName = "") {
   const value = String(productName || "").toLowerCase();
 
+  if (value.includes("extra") || value.includes("capacity") || value.includes("capacidad")) return "extra";
   if (value.includes("audit")) return "audit";
   if (eventName.startsWith("subscription_")) return "subscription";
 
@@ -778,6 +906,13 @@ function extractLemonPaymentInfo(payload = {}, eventName = "") {
     product_label: productLabel,
     product_id: productId,
     variant_id: variantId,
+    product_key: idMapping?.product_key || "",
+    product_family: idMapping?.product_family || family,
+    checkout_link: idMapping?.checkout_link || "",
+    actions: normalizeCounterValue(idMapping?.actions),
+    audits: normalizeCounterValue(idMapping?.audits),
+    pages: normalizeCounterValue(idMapping?.pages),
+    price: normalizeCounterValue(idMapping?.price),
     lemon_id: data.id || "",
     lemon_type: data.type || "",
     lemon_status: attributes.status || ""
@@ -809,43 +944,47 @@ async function grantSubscriptionCapacityUpgrade(paymentInfo = {}, pack = null) {
     throw new Error("Capacity pack invalido");
   }
 
-  const existingUser = await getUserByEmail(paymentInfo.email, "subscription");
-  const user = existingUser || getDefaultSubscriptionUser(paymentInfo.email);
-  const purchaseHistory = normalizePurchaseHistory(user.purchase_history);
-  const lemonOrderId = String(paymentInfo.lemon_id || "").trim();
+  const email = normalizeEmail(paymentInfo.email);
+  const existingUser = await getUserByEmail(email, "subscription");
+  const isAgency = normalizePlan(existingUser?.plan || "free") === "agency" && String(existingUser?.status || "active") === "active";
 
-  if (lemonOrderId && purchaseHistory.some((entry) => String(entry?.lemonOrderId || "").trim() === lemonOrderId)) {
-    return upsertUserAccess({
-      ...user,
-      purchase_history: purchaseHistory
+  if (!isAgency && !hasUnlimitedAgencyOverride(email)) {
+    await recordPaymentLog("extraRejected", paymentInfo, {
+      reason: "extra_requires_agency",
+      packId: pack.packId
+    });
+
+    return {
+      user: existingUser || getDefaultSubscriptionUser(email),
+      skipped: true,
+      reason: "extra_requires_agency"
+    };
+  }
+
+  const result = await addCreditsByEmail(email, pack.extraActions, pack.extraAudits, {
+    type: "agency_extra",
+    packId: pack.packId,
+    productFamily: paymentInfo.product_family || "extra",
+    productKey: paymentInfo.product_key || pack.packId,
+    lemonOrderId: paymentInfo.lemon_id || "",
+    productId: paymentInfo.product_id || "",
+    variantId: paymentInfo.variant_id || ""
+  });
+
+  if (!result.duplicate) {
+    await recordPaymentLog("creditsAdded", paymentInfo, {
+      packId: pack.packId,
+      extraActions: normalizeCounterValue(pack.extraActions),
+      extraAudits: normalizeCounterValue(pack.extraAudits)
+    });
+    await recordPaymentLog("extraAdded", paymentInfo, {
+      packId: pack.packId,
+      totalActionsAfterUpgrade: formatSubscriptionUsage(result.user).totalActionsAfterUpgrade,
+      totalAuditsAfterUpgrade: formatSubscriptionUsage(result.user).totalAuditsAfterUpgrade
     });
   }
 
-  const nextHistory = [
-    {
-      packId: pack.packId,
-      extraActions: normalizeCounterValue(pack.extraActions),
-      extraAudits: normalizeCounterValue(pack.extraAudits),
-      purchasedAt: new Date().toISOString(),
-      lemonOrderId,
-      lemonProductId: paymentInfo.product_id || "",
-      lemonVariantId: paymentInfo.variant_id || ""
-    },
-    ...purchaseHistory
-  ].slice(0, 100);
-
-  return upsertUserAccess({
-    ...user,
-    email: paymentInfo.email,
-    plan: user.plan || paymentInfo.plan || "agency",
-    plan_type: "subscription",
-    status: user.status || "active",
-    extra_actions_balance: normalizeCounterValue(user.extra_actions_balance) + normalizeCounterValue(pack.extraActions),
-    extra_audits_balance: normalizeCounterValue(user.extra_audits_balance) + normalizeCounterValue(pack.extraAudits),
-    extra_actions_purchased_total: normalizeCounterValue(user.extra_actions_purchased_total) + normalizeCounterValue(pack.extraActions),
-    extra_audits_purchased_total: normalizeCounterValue(user.extra_audits_purchased_total) + normalizeCounterValue(pack.extraAudits),
-    purchase_history: nextHistory
-  });
+  return result;
 }
 
 function normalizeLemonStatus(status = "", eventName = "") {
@@ -978,6 +1117,119 @@ function normalizePurchaseHistory(value = []) {
     }
   }
   return [];
+}
+
+function getAuditInstructionMessage() {
+  return [
+    "Instala Zentra Audit.",
+    "Inicia sesion con el mismo correo usado en la compra.",
+    "Entra a tu web.",
+    "Abre Zentra.",
+    "Elige paginas manualmente o automatico.",
+    "Genera auditoria."
+  ];
+}
+
+async function recordPaymentLog(logType = "", paymentInfo = {}, metadata = {}) {
+  if (!supabase || !logType) return null;
+
+  try {
+    const payload = {
+      email: normalizeEmail(paymentInfo.email),
+      log_type: String(logType || "").trim(),
+      lemon_event: String(metadata.eventName || paymentInfo.eventName || "").trim(),
+      lemon_id: String(paymentInfo.lemon_id || "").trim(),
+      lemon_type: String(paymentInfo.lemon_type || "").trim(),
+      product_id: String(paymentInfo.product_id || "").trim(),
+      variant_id: String(paymentInfo.variant_id || "").trim(),
+      product_key: String(paymentInfo.product_key || "").trim(),
+      product_family: String(paymentInfo.product_family || paymentInfo.plan_type || "").trim(),
+      plan: normalizePlan(paymentInfo.plan),
+      plan_type: String(paymentInfo.plan_type || "").trim(),
+      actions: normalizeCounterValue(paymentInfo.actions),
+      audits: normalizeCounterValue(paymentInfo.audits),
+      pages: normalizeCounterValue(paymentInfo.pages),
+      metadata: {
+        productLabel: paymentInfo.product_label || "",
+        productName: paymentInfo.product_name || "",
+        variantName: paymentInfo.variant_name || "",
+        checkoutLink: paymentInfo.checkout_link || "",
+        ...metadata
+      }
+    };
+
+    const { data, error } = await supabase
+      .from("payment_activation_logs")
+      .insert(payload)
+      .select("id")
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.warn("[payment:logs] No se pudo guardar log de activacion:", error?.message || error);
+    return null;
+  }
+}
+
+async function addCreditsByEmail(email, actions = 0, audits = 0, options = {}) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) {
+    throw new Error("Email requerido para sumar creditos");
+  }
+
+  const existingUser = await getUserByEmail(normalizedEmail, "subscription");
+  const user = existingUser || getDefaultSubscriptionUser(normalizedEmail);
+  const purchaseHistory = normalizePurchaseHistory(user.purchase_history);
+  const lemonOrderId = String(options.lemonOrderId || "").trim();
+
+  if (lemonOrderId && purchaseHistory.some((entry) => String(entry?.lemonOrderId || "").trim() === lemonOrderId)) {
+    const savedUser = await upsertUserAccess({
+      ...user,
+      purchase_history: purchaseHistory
+    });
+
+    return {
+      user: savedUser,
+      duplicate: true
+    };
+  }
+
+  const extraActions = normalizeCounterValue(actions);
+  const extraAudits = normalizeCounterValue(audits);
+  const nextHistory = [
+    {
+      type: options.type || "credits",
+      packId: options.packId || "",
+      productFamily: options.productFamily || "extra",
+      productKey: options.productKey || "",
+      extraActions,
+      extraAudits,
+      purchasedAt: new Date().toISOString(),
+      lemonOrderId,
+      lemonProductId: options.productId || "",
+      lemonVariantId: options.variantId || ""
+    },
+    ...purchaseHistory
+  ].slice(0, 100);
+
+  const savedUser = await upsertUserAccess({
+    ...user,
+    email: normalizedEmail,
+    plan: user.plan || "free",
+    plan_type: "subscription",
+    status: user.status || "active",
+    extra_actions_balance: normalizeCounterValue(user.extra_actions_balance) + extraActions,
+    extra_audits_balance: normalizeCounterValue(user.extra_audits_balance) + extraAudits,
+    extra_actions_purchased_total: normalizeCounterValue(user.extra_actions_purchased_total) + extraActions,
+    extra_audits_purchased_total: normalizeCounterValue(user.extra_audits_purchased_total) + extraAudits,
+    purchase_history: nextHistory
+  });
+
+  return {
+    user: savedUser,
+    duplicate: false
+  };
 }
 
 function formatSubscriptionUsage(user = {}) {
@@ -1206,18 +1458,62 @@ async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
 }
 
 async function grantAuditAccess(paymentInfo = {}) {
-  const existingUser = await getUserByEmail(paymentInfo.email, "audit");
-  const nextCredits = Number(existingUser?.audit_credits || 0) + 1;
-  const usedCredits = Number(existingUser?.audit_credits_used || 0);
+  const email = normalizeEmail(paymentInfo.email);
+  const existingUser = await getUserByEmail(email, "audit");
+  const user = existingUser || {
+    ...getDefaultSubscriptionUser(email),
+    plan: paymentInfo.plan,
+    plan_type: "audit"
+  };
+  const purchaseHistory = normalizePurchaseHistory(user.purchase_history);
+  const lemonOrderId = String(paymentInfo.lemon_id || "").trim();
 
-  return upsertUserAccess({
-    email: paymentInfo.email,
+  if (lemonOrderId && purchaseHistory.some((entry) => String(entry?.lemonOrderId || "").trim() === lemonOrderId)) {
+    const savedUser = await upsertUserAccess({
+      ...user,
+      purchase_history: purchaseHistory
+    });
+
+    return {
+      user: savedUser,
+      duplicate: true
+    };
+  }
+
+  const nextHistory = [
+    {
+      type: "audit_credit",
+      productFamily: paymentInfo.product_family || "audit",
+      productKey: paymentInfo.product_key || "",
+      pages: normalizeCounterValue(paymentInfo.pages),
+      purchasedAt: new Date().toISOString(),
+      lemonOrderId,
+      lemonProductId: paymentInfo.product_id || "",
+      lemonVariantId: paymentInfo.variant_id || ""
+    },
+    ...purchaseHistory
+  ].slice(0, 100);
+
+  const savedUser = await upsertUserAccess({
+    ...user,
+    email,
     plan: paymentInfo.plan,
     plan_type: "audit",
     status: "active",
-    audit_credits: nextCredits,
-    audit_credits_used: usedCredits
+    audit_credits: normalizeCounterValue(user.audit_credits) + 1,
+    audit_credits_used: normalizeCounterValue(user.audit_credits_used),
+    purchase_history: nextHistory
   });
+
+  await recordPaymentLog("auditActivated", paymentInfo, {
+    auditInstructions: getAuditInstructionMessage(),
+    pages: normalizeCounterValue(paymentInfo.pages)
+  });
+
+  return {
+    user: savedUser,
+    duplicate: false
+  };
 }
 
 async function consumeAuditCredit(email) {
@@ -2028,7 +2324,10 @@ app.post("/api/lemon/webhook", async (req, res) => {
       });
     }
 
-    const paymentInfo = extractLemonPaymentInfo(payload, eventName);
+    const paymentInfo = {
+      ...extractLemonPaymentInfo(payload, eventName),
+      eventName
+    };
     const capacityPack = getAgencyCapacityPackByLemonIds({
       productId: paymentInfo.product_id,
       variantId: paymentInfo.variant_id
@@ -2042,19 +2341,39 @@ app.post("/api/lemon/webhook", async (req, res) => {
       return res.status(400).json({ error: "Webhook sin email de usuario" });
     }
 
-    if (eventName === "order_created" && capacityPack) {
-      const savedUser = await grantSubscriptionCapacityUpgrade(paymentInfo, capacityPack);
+    await recordPaymentLog("paymentReceived", paymentInfo, { eventName });
+
+    if (eventName === "order_created" && (capacityPack || paymentInfo.plan_type === "extra")) {
+      if (!capacityPack) {
+        await recordPaymentLog("extraRejected", paymentInfo, {
+          reason: "capacity_pack_not_found"
+        });
+
+        return res.status(200).json({
+          success: true,
+          ignored: true,
+          event: eventName,
+          reason: "capacity_pack_not_found"
+        });
+      }
+
+      const result = await grantSubscriptionCapacityUpgrade(paymentInfo, capacityPack);
+      const savedUser = result.user;
       console.log("[lemon:webhook] Expansion de capacidad sincronizada", {
         email: savedUser.email,
         packId: capacityPack.packId,
         extraActions: capacityPack.extraActions,
-        extraAudits: capacityPack.extraAudits
+        extraAudits: capacityPack.extraAudits,
+        skipped: Boolean(result.skipped),
+        duplicate: Boolean(result.duplicate)
       });
 
       return res.status(200).json({
         success: true,
         event: eventName,
         packId: capacityPack.packId,
+        skipped: Boolean(result.skipped),
+        reason: result.reason || null,
         user: savedUser
       });
     }
@@ -2065,19 +2384,30 @@ app.post("/api/lemon/webhook", async (req, res) => {
     }
 
     if (eventName === "order_created" && paymentInfo.plan_type === "audit") {
-      const savedUser = await grantAuditAccess(paymentInfo);
+      const result = await grantAuditAccess(paymentInfo);
+      const savedUser = result.user;
+
+      if (!result.duplicate) {
+        await recordPaymentLog("creditsAdded", paymentInfo, {
+          auditCreditsAdded: 1,
+          auditInstructions: getAuditInstructionMessage()
+        });
+      }
 
       console.log("[lemon:webhook] Compra Audit sincronizada", {
         email: savedUser.email,
         plan: savedUser.plan,
         credits: savedUser.audit_credits,
         used: savedUser.audit_credits_used,
-        product: paymentInfo.product_label
+        product: paymentInfo.product_label,
+        duplicate: Boolean(result.duplicate)
       });
 
       return res.status(200).json({
         success: true,
         event: eventName,
+        duplicate: Boolean(result.duplicate),
+        auditInstructions: getAuditInstructionMessage(),
         user: savedUser
       });
     }
@@ -2120,6 +2450,19 @@ app.post("/api/lemon/webhook", async (req, res) => {
       status: savedUser.status,
       product: paymentInfo.product_label
     });
+
+    await recordPaymentLog("planActivated", paymentInfo, {
+      eventName,
+      status: savedUser.status
+    });
+
+    if (savedUser.status === "active" && eventName !== "subscription_cancelled") {
+      const planLimits = getPlanLimits(savedUser.plan);
+      await recordPaymentLog("creditsAdded", paymentInfo, {
+        baseActions: planLimits.actions,
+        baseAudits: planLimits.audits
+      });
+    }
 
     return res.status(200).json({
       success: true,
