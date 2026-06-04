@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
+import fetch, { File, FormData } from "node-fetch";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -162,6 +162,7 @@ const PDF_FLOW_TASKS = new Set([
   "executive_refiner_pdf"
 ]);
 let PREMIUM_AUDIT_ROUTE_HIT_COUNT = 0;
+const DESKTOP_TRANSCRIPTION_MODEL = process.env.ZENTRA_DESKTOP_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
 
 const LEMON_PRODUCTS = {
   SAAS: {
@@ -1846,6 +1847,126 @@ async function callAiProvider({ provider, model, messages, responseFormat, tempe
   return callOpenAI({ model, messages, responseFormat, temperature, maxTokens });
 }
 
+function normalizeAudioMimeType(mimeType = "") {
+  const value = String(mimeType || "").trim().toLowerCase();
+  if (value.startsWith("audio/webm")) return "audio/webm";
+  if (value.startsWith("audio/mp4")) return "audio/mp4";
+  if (value.startsWith("audio/m4a")) return "audio/m4a";
+  if (value.startsWith("audio/wav")) return "audio/wav";
+  if (value.startsWith("audio/mpeg")) return "audio/mpeg";
+  return "audio/webm";
+}
+
+function extensionFromMimeType(mimeType = "") {
+  switch (normalizeAudioMimeType(mimeType)) {
+    case "audio/mp4":
+      return "mp4";
+    case "audio/m4a":
+      return "m4a";
+    case "audio/wav":
+      return "wav";
+    case "audio/mpeg":
+      return "mp3";
+    case "audio/webm":
+    default:
+      return "webm";
+  }
+}
+
+async function transcribeDesktopAudio({ audioBase64, mimeType = "audio/webm", language = "es" }) {
+  if (!OPENAI_API_KEY) {
+    return {
+      ok: false,
+      status: 500,
+      error: "OPENAI_API_KEY no esta configurada"
+    };
+  }
+
+  const cleanedBase64 = String(audioBase64 || "").replace(/^data:.*;base64,/, "").trim();
+  if (!cleanedBase64) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Audio vacio"
+    };
+  }
+
+  const normalizedMimeType = normalizeAudioMimeType(mimeType);
+  const audioBuffer = Buffer.from(cleanedBase64, "base64");
+  const audioSizeBytes = audioBuffer.byteLength;
+
+  if (!audioSizeBytes) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Audio vacio"
+    };
+  }
+
+  const maxBytes = 25 * 1024 * 1024;
+  if (audioSizeBytes > maxBytes) {
+    return {
+      ok: false,
+      status: 413,
+      error: "El audio supera el limite de 25MB"
+    };
+  }
+
+  const audioFile = new File(
+    [audioBuffer],
+    `zentra-desktop-audio.${extensionFromMimeType(normalizedMimeType)}`,
+    { type: normalizedMimeType }
+  );
+
+  const form = new FormData();
+  form.append("file", audioFile);
+  form.append("model", DESKTOP_TRANSCRIPTION_MODEL);
+  form.append("language", String(language || "es").trim() || "es");
+
+  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`
+    },
+    body: form
+  });
+
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  const payloadText = await response.text();
+
+  if (!response.ok) {
+    let payload = null;
+    try {
+      payload = payloadText ? JSON.parse(payloadText) : null;
+    } catch (_) {}
+
+    return {
+      ok: false,
+      status: response.status,
+      error: payload?.error?.message || payload?.error || payloadText || "No se pudo transcribir el audio"
+    };
+  }
+
+  let transcriptText = payloadText;
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = payloadText ? JSON.parse(payloadText) : {};
+      transcriptText = String(payload?.text || "").trim();
+    } catch (_) {
+      transcriptText = String(payloadText || "").trim();
+    }
+  } else {
+    transcriptText = String(payloadText || "").trim();
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    text: transcriptText,
+    model: DESKTOP_TRANSCRIPTION_MODEL
+  };
+}
+
 function sanitizeChatMessages(messages = []) {
   return messages.map((msg, index) => {
     const isLastMessage = index === messages.length - 1;
@@ -2303,6 +2424,38 @@ app.get("/api/health", (_req, res) => {
       executive_refiner_max_tokens: ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS
     }
   });
+});
+
+app.post("/api/audio/transcribe", async (req, res) => {
+  try {
+    const {
+      audioBase64 = "",
+      mimeType = "audio/webm",
+      language = "es"
+    } = req.body || {};
+
+    const result = await transcribeDesktopAudio({
+      audioBase64,
+      mimeType,
+      language
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json({
+        error: result.error || "No se pudo transcribir el audio"
+      });
+    }
+
+    return res.json({
+      success: true,
+      text: result.text || "",
+      model: result.model || DESKTOP_TRANSCRIPTION_MODEL
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: error?.message || "No se pudo transcribir el audio"
+    });
+  }
 });
 
 app.post("/api/lemon/webhook", async (req, res) => {
