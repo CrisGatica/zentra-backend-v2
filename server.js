@@ -15,9 +15,9 @@ const ANTHROPIC_API_VERSION = process.env.ANTHROPIC_API_VERSION || "2023-06-01";
 const ZENTRA_BASE_PROVIDER = normalizeProvider(process.env.ZENTRA_BASE_PROVIDER || "openai");
 const ZENTRA_PREMIUM_PROVIDER = normalizeProvider(process.env.ZENTRA_PREMIUM_PROVIDER || ZENTRA_BASE_PROVIDER);
 const ZENTRA_PREMIUM_FINAL_PROVIDER = normalizeProvider(process.env.ZENTRA_PREMIUM_FINAL_PROVIDER || ZENTRA_PREMIUM_PROVIDER);
-const ZENTRA_BASE_MODEL = process.env.ZENTRA_BASE_MODEL || "gpt-4o-mini";
-const ZENTRA_PREMIUM_MODEL = process.env.ZENTRA_PREMIUM_MODEL || ZENTRA_BASE_MODEL;
-const ZENTRA_PREMIUM_FINAL_MODEL = process.env.ZENTRA_PREMIUM_FINAL_MODEL || ZENTRA_PREMIUM_MODEL;
+const ZENTRA_BASE_MODEL = process.env.ZENTRA_BASE_MODEL || "gpt-5-mini";
+const ZENTRA_PREMIUM_MODEL = process.env.ZENTRA_PREMIUM_MODEL || "gpt-5.4-mini";
+const ZENTRA_PREMIUM_FINAL_MODEL = process.env.ZENTRA_PREMIUM_FINAL_MODEL || "gpt-5";
 const ZENTRA_EXECUTIVE_REFINER_ENABLED = String(process.env.ZENTRA_EXECUTIVE_REFINER_ENABLED || "false").trim().toLowerCase() === "true";
 const ZENTRA_EXECUTIVE_REFINER_PROVIDER = normalizeProvider(process.env.ZENTRA_EXECUTIVE_REFINER_PROVIDER || ZENTRA_PREMIUM_FINAL_PROVIDER);
 const ZENTRA_EXECUTIVE_REFINER_MODEL = process.env.ZENTRA_EXECUTIVE_REFINER_MODEL || ZENTRA_PREMIUM_FINAL_MODEL;
@@ -29,14 +29,14 @@ const ZENTRA_EXECUTIVE_REFINER_TEMPERATURE = normalizeTemperature(process.env.ZE
 const ZENTRA_CHAT_FAST_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_FAST_PROVIDER || ZENTRA_BASE_PROVIDER);
 const ZENTRA_CHAT_FAST_MODEL = process.env.ZENTRA_CHAT_FAST_MODEL || ZENTRA_BASE_MODEL;
 const ZENTRA_CHAT_REASONING_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_REASONING_PROVIDER || ZENTRA_PREMIUM_PROVIDER);
-const ZENTRA_CHAT_REASONING_MODEL = process.env.ZENTRA_CHAT_REASONING_MODEL || "gpt-5-mini";
+const ZENTRA_CHAT_REASONING_MODEL = process.env.ZENTRA_CHAT_REASONING_MODEL || ZENTRA_PREMIUM_MODEL;
 const ZENTRA_CHAT_REASONING_MAX_TOKENS = Math.max(
   512,
   normalizeCounterValue(process.env.ZENTRA_CHAT_REASONING_MAX_TOKENS || 1800) || 1800
 );
 const ZENTRA_CHAT_EXECUTIVE_ENABLED = String(process.env.ZENTRA_CHAT_EXECUTIVE_ENABLED || "false").trim().toLowerCase() !== "false";
 const ZENTRA_CHAT_EXECUTIVE_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_EXECUTIVE_PROVIDER || ZENTRA_PREMIUM_FINAL_PROVIDER);
-const ZENTRA_CHAT_EXECUTIVE_MODEL = process.env.ZENTRA_CHAT_EXECUTIVE_MODEL || "gpt-5";
+const ZENTRA_CHAT_EXECUTIVE_MODEL = process.env.ZENTRA_CHAT_EXECUTIVE_MODEL || ZENTRA_PREMIUM_MODEL;
 const ZENTRA_CHAT_EXECUTIVE_MAX_TOKENS = Math.max(
   256,
   normalizeCounterValue(process.env.ZENTRA_CHAT_EXECUTIVE_MAX_TOKENS || 1200) || 1200
@@ -124,8 +124,8 @@ const AI_TASK_ROUTING = {
     maxTokens: 2200
   },
   pdf_polish: {
-    provider: ZENTRA_PREMIUM_FINAL_PROVIDER,
-    model: ZENTRA_PREMIUM_FINAL_MODEL,
+    provider: ZENTRA_PREMIUM_PROVIDER,
+    model: ZENTRA_PREMIUM_MODEL,
     fallbackProvider: ZENTRA_BASE_PROVIDER,
     fallbackModel: ZENTRA_BASE_MODEL,
     premium: true,
@@ -134,8 +134,8 @@ const AI_TASK_ROUTING = {
     maxTokens: 3072
   },
   premium_reasoning_audit: {
-    provider: ZENTRA_PREMIUM_FINAL_PROVIDER,
-    model: ZENTRA_PREMIUM_FINAL_MODEL,
+    provider: ZENTRA_PREMIUM_PROVIDER,
+    model: ZENTRA_PREMIUM_MODEL,
     fallbackProvider: ZENTRA_BASE_PROVIDER,
     fallbackModel: ZENTRA_BASE_MODEL,
     premium: true,
@@ -1637,43 +1637,340 @@ function shouldOmitTemperatureForModel(model = "") {
   return /^gpt-5($|-)/i.test(String(model || "").trim());
 }
 
-function normalizeOpenAIResponsesContent(content = "") {
+function isPlainObject(value) {
+  return Boolean(value) && Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function cloneSafeText(text = "") {
+  return String(text || "").trim();
+}
+
+function normalizeOpenAIResponsesContent(content = "", role = "user") {
+  const normalizedRole = role === "assistant" ? "assistant" : "user";
+
+  const mapTextPart = (text = "") => {
+    const safeText = cloneSafeText(text);
+    return normalizedRole === "assistant"
+      ? { type: "output_text", text: safeText }
+      : { type: "input_text", text: safeText };
+  };
+
   if (typeof content === "string") {
-    return [{ type: "input_text", text: content }];
+    return [mapTextPart(content)];
   }
 
   if (!Array.isArray(content)) {
-    return [{ type: "input_text", text: String(content || "") }];
+    return [mapTextPart(String(content || ""))];
   }
 
   return content
     .map((item) => {
       if (!item || typeof item !== "object") return null;
-      if (item.type === "text") {
-        return { type: "input_text", text: item.text || "" };
+
+      if (normalizedRole === "assistant") {
+        if (item.type === "refusal") {
+          return { type: "refusal", refusal: cloneSafeText(item.refusal || item.text || "") };
+        }
+
+        if (item.type === "output_text") {
+          return { type: "output_text", text: cloneSafeText(item.text || item.output_text || "") };
+        }
+
+        if (item.type === "input_text" || item.type === "text" || typeof item.text === "string") {
+          return { type: "output_text", text: cloneSafeText(item.text || item.output_text || "") };
+        }
+
+        if (item.type === "input_image" || item.type === "image_url") {
+          const imageUrl = item.image_url?.url || item.image_url || item.url || "";
+          return imageUrl
+            ? { type: "output_text", text: "[imagen omitida del historial]" }
+            : null;
+        }
+
+        return null;
       }
-      if (item.type === "image_url" && item.image_url?.url) {
-        return { type: "input_image", image_url: item.image_url.url };
+
+      if (item.type === "image_url" && (item.image_url?.url || item.image_url || item.url)) {
+        return { type: "input_image", image_url: item.image_url?.url || item.image_url || item.url };
       }
-      if (typeof item.text === "string") {
-        return { type: "input_text", text: item.text };
+
+      if (item.type === "input_image" && (item.image_url?.url || item.image_url || item.url)) {
+        return { type: "input_image", image_url: item.image_url?.url || item.image_url || item.url };
       }
+
+      if (item.type === "input_text" || item.type === "text" || typeof item.text === "string") {
+        return { type: "input_text", text: cloneSafeText(item.text || item.output_text || "") };
+      }
+
+      if (item.type === "output_text" && typeof item.text === "string") {
+        return { type: "input_text", text: cloneSafeText(item.text) };
+      }
+
+      if (item.type === "refusal") {
+        return { type: "input_text", text: cloneSafeText(item.refusal || item.text || "") };
+      }
+
+      if (isPlainObject(item.content)) {
+        const nestedText = extractTextFromContent(item.content);
+        if (nestedText) {
+          return normalizedRole === "assistant"
+            ? { type: "output_text", text: nestedText }
+            : { type: "input_text", text: nestedText };
+        }
+      }
+
+      const fallbackText = extractTextFromContent(item);
+      if (fallbackText) {
+        return normalizedRole === "assistant"
+          ? { type: "output_text", text: fallbackText }
+          : { type: "input_text", text: fallbackText };
+      }
+
       return null;
     })
     .filter(Boolean);
 }
 
-function normalizeOpenAIResponsesInput(messages = []) {
-  return messages.map((msg) => ({
-    role: msg?.role === "assistant" ? "assistant" : (msg?.role === "system" ? "system" : "user"),
-    content: normalizeOpenAIResponsesContent(msg?.content)
-  }));
+function sanitizeResponsesContentParts(content = [], role = "user", stats = null, path = "content") {
+  const normalizedRole = role === "assistant" ? "assistant" : "user";
+  const source = Array.isArray(content) ? content : [content];
+  const sanitized = [];
+
+  source.forEach((item, index) => {
+    const itemPath = `${path}[${index}]`;
+
+    if (item == null) {
+      if (stats) stats.dropped += 1;
+      return;
+    }
+
+    if (Array.isArray(item)) {
+      const nested = sanitizeResponsesContentParts(item, normalizedRole, stats, itemPath);
+      if (nested.length) sanitized.push(...nested);
+      return;
+    }
+
+    if (typeof item === "string") {
+      const text = cloneSafeText(item);
+      if (!text) {
+        if (stats) stats.dropped += 1;
+        return;
+      }
+
+      sanitized.push(normalizedRole === "assistant"
+        ? { type: "output_text", text }
+        : { type: "input_text", text });
+      if (stats) stats.stringParts += 1;
+      return;
+    }
+
+    if (!isPlainObject(item)) {
+      const fallbackText = extractTextFromContent(item);
+      if (fallbackText) {
+        sanitized.push(normalizedRole === "assistant"
+          ? { type: "output_text", text: fallbackText }
+          : { type: "input_text", text: fallbackText });
+        if (stats) stats.coerced += 1;
+      } else if (stats) {
+        stats.dropped += 1;
+      }
+      return;
+    }
+
+    const rawType = String(item.type || "").trim().toLowerCase();
+    const textFromItem = cloneSafeText(item.text || item.output_text || item.refusal || item.content || "");
+
+    if (normalizedRole === "assistant") {
+      if (rawType === "refusal") {
+        if (textFromItem) {
+          sanitized.push({ type: "refusal", refusal: textFromItem });
+        } else if (stats) {
+          stats.dropped += 1;
+        }
+        return;
+      }
+
+      if (rawType === "output_text") {
+        if (textFromItem) {
+          sanitized.push({ type: "output_text", text: textFromItem });
+        } else if (stats) {
+          stats.dropped += 1;
+        }
+        return;
+      }
+
+      if (rawType === "input_text" || rawType === "text") {
+        if (textFromItem) {
+          sanitized.push({ type: "output_text", text: textFromItem });
+          if (stats) stats.fixedAssistantInputText += 1;
+        } else if (stats) {
+          stats.dropped += 1;
+        }
+        return;
+      }
+
+      if (rawType === "input_image" || rawType === "image_url" || item.image_url?.url || item.url) {
+        const imageUrl = item.image_url?.url || item.image_url || item.url || "";
+        if (imageUrl) {
+          sanitized.push({ type: "output_text", text: "[imagen omitida del historial]" });
+          if (stats) stats.fixedAssistantImage += 1;
+        } else if (stats) {
+          stats.dropped += 1;
+        }
+        return;
+      }
+
+      if (Array.isArray(item.content)) {
+        const nested = sanitizeResponsesContentParts(item.content, normalizedRole, stats, `${itemPath}.content`);
+        if (nested.length) {
+          sanitized.push(...nested);
+          if (stats) stats.coerced += 1;
+          return;
+        }
+      }
+
+      if (textFromItem) {
+        sanitized.push({ type: "output_text", text: textFromItem });
+        if (stats) stats.coerced += 1;
+        return;
+      }
+
+      if (stats) stats.dropped += 1;
+      return;
+    }
+
+    if (rawType === "input_image" || rawType === "image_url" || item.image_url?.url || item.url) {
+      const imageUrl = item.image_url?.url || item.image_url || item.url || "";
+      if (imageUrl) {
+        sanitized.push({ type: "input_image", image_url: imageUrl });
+      } else if (stats) {
+        stats.dropped += 1;
+      }
+      return;
+    }
+
+    if (rawType === "input_text" || rawType === "text") {
+      if (textFromItem) {
+        sanitized.push({ type: "input_text", text: textFromItem });
+      } else if (stats) {
+        stats.dropped += 1;
+      }
+      return;
+    }
+
+    if (rawType === "output_text") {
+      if (textFromItem) {
+        sanitized.push({ type: "input_text", text: textFromItem });
+        if (stats) stats.fixedOutputText += 1;
+      } else if (stats) {
+        stats.dropped += 1;
+      }
+      return;
+    }
+
+    if (rawType === "refusal") {
+      if (textFromItem) {
+        sanitized.push({ type: "input_text", text: textFromItem });
+        if (stats) stats.fixedRefusal += 1;
+      } else if (stats) {
+        stats.dropped += 1;
+      }
+      return;
+    }
+
+    if (Array.isArray(item.content)) {
+      const nested = sanitizeResponsesContentParts(item.content, normalizedRole, stats, `${itemPath}.content`);
+      if (nested.length) {
+        sanitized.push(...nested);
+        if (stats) stats.coerced += 1;
+        return;
+      }
+    }
+
+    if (textFromItem) {
+      sanitized.push({ type: "input_text", text: textFromItem });
+      if (stats) stats.coerced += 1;
+      return;
+    }
+
+    if (stats) stats.dropped += 1;
+  });
+
+  return sanitized;
 }
 
-function buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temperature, maxTokens }) {
+function sanitizeResponsesMessage(message = {}, index = 0, stats = null) {
+  const role = message?.role === "assistant"
+    ? "assistant"
+    : (message?.role === "system" ? "system" : (message?.role === "developer" ? "developer" : "user"));
+  const content = sanitizeResponsesContentParts(message?.content, role === "assistant" ? "assistant" : "user", stats, `messages[${index}].content`);
+  return {
+    role: role === "assistant" ? "assistant" : (role === "system" ? "system" : (role === "developer" ? "developer" : "user")),
+    content
+  };
+}
+
+function sanitizeResponsesInput(input = [], meta = {}) {
+  const stats = {
+    fixedAssistantInputText: 0,
+    fixedAssistantImage: 0,
+    fixedOutputText: 0,
+    fixedRefusal: 0,
+    coerced: 0,
+    dropped: 0,
+    stringParts: 0
+  };
+
+  const source = Array.isArray(input) ? input : [];
+  const sanitized = source.map((message, index) => sanitizeResponsesMessage(message, index, stats));
+
+  return {
+    input: sanitized,
+    stats: {
+      ...stats,
+      corrected: Boolean(
+        stats.fixedAssistantInputText
+        || stats.fixedAssistantImage
+        || stats.fixedOutputText
+        || stats.fixedRefusal
+        || stats.coerced
+      ),
+      routeName: meta.routeName || null,
+      taskType: meta.taskType || null,
+      requestedModel: meta.requestedModel || null,
+      contextDecision: meta.contextDecision || null,
+      outputType: meta.outputType || null,
+      renderType: meta.renderType || null,
+      hasHistory: sanitized.length > 1,
+      messageCount: sanitized.length
+    }
+  };
+}
+
+function summarizeOpenAIResponsesInputForLog(input = []) {
+  return Array.isArray(input)
+    ? input.map((msg, index) => ({
+        index,
+        role: msg?.role || "user",
+        contentTypes: Array.isArray(msg?.content) ? msg.content.map((item) => item?.type).filter(Boolean) : [],
+        textPreview: extractTextFromContent(msg?.content).slice(0, 120)
+      }))
+    : [];
+}
+
+function buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temperature, maxTokens, requestContext = {} }) {
+  const sanitized = sanitizeResponsesInput(messages, {
+    routeName: requestContext.routeName || requestContext.taskType || null,
+    taskType: requestContext.taskType || null,
+    requestedModel: requestContext.requestedModel || model || null,
+    contextDecision: requestContext.contextDecision || null,
+    outputType: requestContext.outputType || null,
+    renderType: requestContext.renderType || null
+  });
+
   const body = {
     model,
-    input: normalizeOpenAIResponsesInput(messages),
+    input: sanitized.input,
     max_output_tokens: maxTokens
   };
 
@@ -1685,7 +1982,10 @@ function buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temp
     body.temperature = normalizeTemperature(temperature);
   }
 
-  return body;
+  return {
+    body,
+    sanitizerStats: sanitized.stats
+  };
 }
 
 function buildAnthropicRequestBody({ model, messages, temperature, maxTokens }) {
@@ -1698,7 +1998,7 @@ function buildAnthropicRequestBody({ model, messages, temperature, maxTokens }) 
   };
 }
 
-async function callOpenAI({ model, messages, responseFormat, temperature, maxTokens }) {
+async function callOpenAI({ model, messages, responseFormat, temperature, maxTokens, requestContext = {} }) {
   if (!OPENAI_API_KEY) {
     return {
       ok: false,
@@ -1713,9 +2013,42 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
   const endpoint = useResponsesApi
     ? "https://api.openai.com/v1/responses"
     : "https://api.openai.com/v1/chat/completions";
-  const body = useResponsesApi
-    ? buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temperature, maxTokens })
-    : buildOpenAIRequestBody({ model, messages, responseFormat, temperature, maxTokens });
+  const responseBody = useResponsesApi
+    ? buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temperature, maxTokens, requestContext })
+    : { body: buildOpenAIRequestBody({ model, messages, responseFormat, temperature, maxTokens }), sanitizerStats: null };
+  const body = responseBody.body;
+
+  if (useResponsesApi) {
+    console.log("[OPENAI RESPONSES INPUT]", {
+      routeName: requestContext.routeName || requestContext.route || null,
+      taskType: requestContext.taskType || null,
+      requestedModel: requestContext.requestedModel || model,
+      provider: requestContext.provider || "openai",
+      contextDecision: requestContext.contextDecision || null,
+      outputType: requestContext.outputType || null,
+      renderType: requestContext.renderType || null,
+      hasHistory: Boolean(responseBody.sanitizerStats?.hasHistory),
+      corrected: Boolean(responseBody.sanitizerStats?.corrected),
+      corrections: responseBody.sanitizerStats ? {
+        fixedAssistantInputText: responseBody.sanitizerStats.fixedAssistantInputText,
+        fixedAssistantImage: responseBody.sanitizerStats.fixedAssistantImage,
+        fixedOutputText: responseBody.sanitizerStats.fixedOutputText,
+        fixedRefusal: responseBody.sanitizerStats.fixedRefusal,
+        coerced: responseBody.sanitizerStats.coerced,
+        dropped: responseBody.sanitizerStats.dropped
+      } : null,
+      summary: summarizeOpenAIResponsesInputForLog(body.input)
+    });
+
+    if (responseBody.sanitizerStats?.fixedAssistantInputText) {
+      console.warn("[FIXED ASSISTANT INPUT_TEXT]", {
+        routeName: requestContext.routeName || requestContext.route || null,
+        taskType: requestContext.taskType || null,
+        requestedModel: requestContext.requestedModel || model,
+        fixedCount: responseBody.sanitizerStats.fixedAssistantInputText
+      });
+    }
+  }
 
   const response = await fetch(endpoint, {
     method: "POST",
@@ -1837,14 +2170,17 @@ function getAiErrorMessage(result = {}) {
     || `Error en ${result.provider || "proveedor IA"}`;
 }
 
-async function callAiProvider({ provider, model, messages, responseFormat, temperature, maxTokens }) {
+async function callAiProvider({ provider, model, messages, responseFormat, temperature, maxTokens, requestContext = {} }) {
   const normalizedProvider = normalizeProvider(provider);
 
   if (normalizedProvider === "anthropic") {
     return callAnthropic({ model, messages, temperature, maxTokens });
   }
 
-  return callOpenAI({ model, messages, responseFormat, temperature, maxTokens });
+  return callOpenAI({ model, messages, responseFormat, temperature, maxTokens, requestContext: {
+    provider: normalizedProvider,
+    ...requestContext
+  } });
 }
 
 function normalizeAudioMimeType(mimeType = "") {
@@ -2342,7 +2678,8 @@ async function callLayeredChatStep({
   cleanMessages,
   temperature = 0.4,
   maxTokens = 900,
-  responseFormat = { type: "json_object" }
+  responseFormat = { type: "json_object" },
+  requestContext = {}
 }) {
   const layerMessages = [
     buildJsonControlMessage(instruction),
@@ -2355,7 +2692,13 @@ async function callLayeredChatStep({
     messages: layerMessages,
     responseFormat,
     temperature,
-    maxTokens
+    maxTokens,
+    requestContext: {
+      routeName: route.taskType || "layered_chat",
+      taskType: route.taskType || null,
+      requestedModel: route.model || null,
+      ...requestContext
+    }
   });
 
   let fallbackError = null;
@@ -2369,14 +2712,20 @@ async function callLayeredChatStep({
     && (route.fallbackModel !== route.model || route.fallbackProvider !== route.provider)
   ) {
     fallbackError = getAiErrorMessage(result);
-    result = await callAiProvider({
-      provider: route.fallbackProvider,
-      model: route.fallbackModel,
-      messages: layerMessages,
-      responseFormat,
-      temperature,
-      maxTokens
-    });
+      result = await callAiProvider({
+        provider: route.fallbackProvider,
+        model: route.fallbackModel,
+        messages: layerMessages,
+        responseFormat,
+        temperature,
+        maxTokens,
+        requestContext: {
+          routeName: route.taskType || "layered_chat_fallback",
+          taskType: route.taskType || null,
+          requestedModel: route.fallbackModel || route.model || null,
+          ...requestContext
+        }
+      });
     requestedProvider = route.fallbackProvider;
     requestedModel = route.fallbackModel;
   }
@@ -2913,6 +3262,7 @@ app.post("/api/chat/stream", async (req, res) => {
     const responseFormat = response_format || { type: "json_object" };
     const cleanMessages = sanitizeChatMessages(messages);
     const maxTokens = clampMaxTokens(req.body?.max_tokens || incomingRouting.maxTokens, taskType);
+    const responseContract = req.body?.responseContract || req.body?.response_contract || req.body?.zentra_response_contract || req.body?.zentra_contract || null;
     const requestedPremium = taskType === "chat_premium";
     const premiumPreview = requestedPremium
       ? await resolveAiRoutingForRequest(req, { consumePremium: false })
@@ -2925,6 +3275,14 @@ app.post("/api/chat/stream", async (req, res) => {
           premiumConsumed: false,
           reason: "premium_not_requested"
         };
+    const requestContext = {
+      routeName: "api/chat/stream",
+      taskType,
+      requestedModel: req.body?.model || req.body?.zentra_routing?.selectedModel || null,
+      contextDecision: responseContract?.contextDecision || req.body?.contextDecision || req.body?.zentra_contextDecision || null,
+      outputType: responseContract?.outputType || req.body?.outputType || req.body?.zentra_outputType || null,
+      renderType: responseContract?.renderType || req.body?.renderType || req.body?.zentra_renderType || null
+    };
 
     const fastRoute = {
       taskType: "chat_basic",
@@ -2949,7 +3307,8 @@ app.post("/api/chat/stream", async (req, res) => {
       cleanMessages,
       temperature: 0.55,
       maxTokens: fastRoute.maxTokens,
-      responseFormat
+      responseFormat,
+      requestContext
     });
 
     if (!fastStep.ok) {
@@ -3073,7 +3432,8 @@ app.post("/api/chat/stream", async (req, res) => {
             reasoningRouting.maxTokens || ZENTRA_CHAT_REASONING_MAX_TOKENS,
             ZENTRA_CHAT_REASONING_MAX_TOKENS
           ),
-          responseFormat
+          responseFormat,
+          requestContext
         });
 
         finalRouting.premiumFallbackError = reasoningStep.fallbackError || null;
@@ -3140,7 +3500,8 @@ app.post("/api/chat/stream", async (req, res) => {
               cleanMessages,
               temperature: 0.2,
               maxTokens: executiveRoute.maxTokens,
-              responseFormat
+              responseFormat,
+              requestContext
             });
 
             if (executiveStep.ok) {
@@ -3271,6 +3632,15 @@ app.post("/api/chat", async (req, res) => {
     }
     const aiRouting = await resolveAiRoutingForRequest(req);
     let premiumFallbackError = null;
+    const responseContract = req.body?.responseContract || req.body?.response_contract || req.body?.zentra_response_contract || req.body?.zentra_contract || null;
+    const requestContext = {
+      routeName: "api/chat",
+      taskType: aiRouting.taskType,
+      requestedModel: req.body?.model || req.body?.zentra_routing?.selectedModel || null,
+      contextDecision: responseContract?.contextDecision || req.body?.contextDecision || req.body?.zentra_contextDecision || null,
+      outputType: responseContract?.outputType || req.body?.outputType || req.body?.zentra_outputType || null,
+      renderType: responseContract?.renderType || req.body?.renderType || req.body?.zentra_renderType || null
+    };
     const traceResolvedPdfFlow = tracePdfFlow || isPdfFlowTask(aiRouting.taskType);
     if (traceResolvedPdfFlow) {
       logPdfTrace({
@@ -3327,7 +3697,8 @@ app.post("/api/chat", async (req, res) => {
       messages: providerMessages,
       responseFormat: response_format,
       temperature,
-      maxTokens: aiRouting.maxTokens
+      maxTokens: aiRouting.maxTokens,
+      requestContext
     });
     if (traceResolvedPdfFlow) {
       logPdfTrace({
@@ -3373,7 +3744,12 @@ app.post("/api/chat", async (req, res) => {
         messages: providerMessages,
         responseFormat: response_format,
         temperature,
-        maxTokens: aiRouting.maxTokens
+        maxTokens: aiRouting.maxTokens,
+        requestContext: {
+          ...requestContext,
+          routeName: "api/chat:fallback",
+          requestedModel: aiRouting.fallbackModel
+        }
       });
       if (traceResolvedPdfFlow) {
         logPdfTrace({
