@@ -161,7 +161,30 @@ const PDF_FLOW_TASKS = new Set([
   "premium_reasoning_audit",
   "executive_refiner_pdf"
 ]);
-const USER_ACCESS_SELECT_FIELDS = "id, auth_user_id, email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, extra_actions_balance, extra_audits_balance, extra_actions_used_cycle, extra_audits_used_cycle, extra_actions_purchased_total, extra_audits_purchased_total, purchase_history, billing_cycle_start, updated_at";
+const USER_ACCESS_HAS_AUTH_USER_ID = String(process.env.USER_ACCESS_HAS_AUTH_USER_ID || "").toLowerCase() === "true";
+const USER_ACCESS_SELECT_FIELDS = [
+  "id",
+  ...(USER_ACCESS_HAS_AUTH_USER_ID ? ["auth_user_id"] : []),
+  "email",
+  "plan",
+  "plan_type",
+  "status",
+  "audit_credits",
+  "audit_credits_used",
+  "actions_used",
+  "audits_used",
+  "premium_chat_used",
+  "premium_pdf_used",
+  "extra_actions_balance",
+  "extra_audits_balance",
+  "extra_actions_used_cycle",
+  "extra_audits_used_cycle",
+  "extra_actions_purchased_total",
+  "extra_audits_purchased_total",
+  "purchase_history",
+  "billing_cycle_start",
+  "updated_at"
+].join(", ");
 let PREMIUM_AUDIT_ROUTE_HIT_COUNT = 0;
 const DESKTOP_TRANSCRIPTION_MODEL = process.env.ZENTRA_DESKTOP_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
 
@@ -1294,6 +1317,10 @@ async function upsertUserAccess(userData = {}) {
     billing_cycle_start: normalizeCounterValue(userData.billing_cycle_start || Date.now()),
     updated_at: new Date().toISOString()
   };
+  const storagePayload = { ...payload };
+  if (!USER_ACCESS_HAS_AUTH_USER_ID) {
+    delete storagePayload.auth_user_id;
+  }
 
   const normalizedPlanType = payload.plan_type === "audit" ? "audit" : "subscription";
   const existingUser = await getUserByIdentity({
@@ -1304,7 +1331,7 @@ async function upsertUserAccess(userData = {}) {
   if (existingUser?.id) {
     const { data, error } = await client
       .from("users")
-      .update(payload)
+      .update(storagePayload)
       .eq("id", existingUser.id)
       .select(USER_ACCESS_SELECT_FIELDS)
       .single();
@@ -1318,7 +1345,7 @@ async function upsertUserAccess(userData = {}) {
 
   const { data, error } = await client
     .from("users")
-    .insert(payload)
+    .insert(storagePayload)
     .select(USER_ACCESS_SELECT_FIELDS)
     .single();
 
@@ -1335,7 +1362,7 @@ async function getUserByIdentity(identityOrEmail = {}, planType = "subscription"
   const normalizedPlanType = String(planType || "subscription").trim().toLowerCase() === "audit" ? "audit" : "subscription";
   const matches = [];
 
-  if (identity.userId) {
+  if (USER_ACCESS_HAS_AUTH_USER_ID && identity.userId) {
     const authQuery = await client
       .from("users")
       .select(USER_ACCESS_SELECT_FIELDS)
