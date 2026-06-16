@@ -74,10 +74,10 @@ const PLAN_LIMITS = {
 };
 
 const PREMIUM_LIMITS = {
-  free: { premium_chat_used: 20, premium_pdf_used: 0 },
-  starter: { premium_chat_used: 20, premium_pdf_used: 0 },
-  pro: { premium_chat_used: 150, premium_pdf_used: 30 },
-  agency: { premium_chat_used: 400, premium_pdf_used: 80 }
+  free: { premium_chat_used: 3, premium_pdf_used: 0 },
+  starter: { premium_chat_used: 30, premium_pdf_used: 0 },
+  pro: { premium_chat_used: 100, premium_pdf_used: 30 },
+  agency: { premium_chat_used: 300, premium_pdf_used: 80 }
 };
 const TEMP_UNLIMITED_LIMIT = 999999;
 const TEMP_UNLIMITED_AGENCY_EMAILS = new Set([
@@ -103,7 +103,7 @@ const AI_TASK_ROUTING = {
     fallbackProvider: ZENTRA_CHAT_FAST_PROVIDER,
     fallbackModel: ZENTRA_CHAT_FAST_MODEL,
     premium: true,
-    counterKey: "premium_chat_used",
+    counterKey: "advanced_actions_used",
     allowedPlans: ["free", "starter", "pro", "agency"],
     maxTokens: ZENTRA_CHAT_REASONING_MAX_TOKENS
   },
@@ -161,6 +161,7 @@ const PDF_FLOW_TASKS = new Set([
   "premium_reasoning_audit",
   "executive_refiner_pdf"
 ]);
+const USER_ACCESS_SELECT_FIELDS = "id, auth_user_id, email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, extra_actions_balance, extra_audits_balance, extra_actions_used_cycle, extra_audits_used_cycle, extra_actions_purchased_total, extra_audits_purchased_total, purchase_history, billing_cycle_start, updated_at";
 let PREMIUM_AUDIT_ROUTE_HIT_COUNT = 0;
 const DESKTOP_TRANSCRIPTION_MODEL = process.env.ZENTRA_DESKTOP_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
 
@@ -389,6 +390,163 @@ function normalizeCounterValue(value = 0) {
   return Number.isFinite(numberValue) && numberValue >= 0 ? Math.floor(numberValue) : 0;
 }
 
+function normalizeAuthUserId(value = "") {
+  return String(value || "").trim();
+}
+
+function normalizeIdentityInput(identity = {}, fallbackEmail = "") {
+  if (typeof identity === "string") {
+    return {
+      email: normalizeEmail(identity),
+      userId: "",
+      identitySource: identity ? "email" : "unknown"
+    };
+  }
+
+  const raw = identity || {};
+  const email = normalizeEmail(
+    raw.email ||
+    raw.userEmail ||
+    raw.customer_email ||
+    raw.zentra_user_email ||
+    fallbackEmail ||
+    ""
+  );
+  const userId = normalizeAuthUserId(
+    raw.userId ||
+    raw.user_id ||
+    raw.auth_user_id ||
+    raw.zentra_user_id ||
+    raw.id ||
+    ""
+  );
+  const identitySource = String(raw.identitySource || raw.identity_source || "").trim() || (userId ? "auth_user_id" : (email ? "email" : "unknown"));
+
+  return {
+    email,
+    userId,
+    identitySource
+  };
+}
+
+function getIdentityFromRequest(req = {}, routing = {}) {
+  const body = req?.body || {};
+  const query = req?.query || {};
+  const email = normalizeEmail(
+    body.zentra_user_email ||
+    body.user_email ||
+    query.email ||
+    routing.email ||
+    routing.userEmail ||
+    ""
+  );
+  const userId = normalizeAuthUserId(
+    body.zentra_user_id ||
+    body.user_id ||
+    body.auth_user_id ||
+    query.user_id ||
+    query.auth_user_id ||
+    routing.userId ||
+    routing.authUserId ||
+    ""
+  );
+  const identitySource = body.zentra_user_id || body.user_id || body.auth_user_id
+    ? "body.user_id"
+    : (query.user_id || query.auth_user_id)
+      ? "query.user_id"
+      : (routing.userId || routing.authUserId)
+        ? "routing.user_id"
+        : (email ? "email" : "unknown");
+
+  return {
+    email,
+    userId,
+    identitySource
+  };
+}
+
+async function fetchAuthUserById(userId = "") {
+  const normalizedUserId = normalizeAuthUserId(userId);
+  if (!normalizedUserId || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !supabase?.auth?.admin?.getUserById) {
+    return null;
+  }
+
+  try {
+    const { data, error } = await supabase.auth.admin.getUserById(normalizedUserId);
+    if (error) return null;
+    return data?.user || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function resolveIdentityContext(identity = {}, planType = "subscription") {
+  const normalizedIdentity = normalizeIdentityInput(identity);
+  let authUser = null;
+
+  if (normalizedIdentity.userId) {
+    authUser = await fetchAuthUserById(normalizedIdentity.userId);
+    if (!normalizedIdentity.email) {
+      normalizedIdentity.email = normalizeEmail(authUser?.email || "");
+    }
+  }
+
+  return {
+    ...normalizedIdentity,
+    planType,
+    authUser,
+    isEmailConfirmed: Boolean(authUser?.email_confirmed_at || authUser?.confirmed_at),
+    emailConfirmedAt: authUser?.email_confirmed_at || null,
+    confirmedAt: authUser?.confirmed_at || null,
+    lastSignInAt: authUser?.last_sign_in_at || null
+  };
+}
+
+function buildAuthDebugPayload({
+  emailFromFrontend = "",
+  identity = {},
+  plan = null,
+  usageRow = null,
+  authUser = null,
+  extra = {}
+} = {}) {
+  const normalizedIdentity = normalizeIdentityInput(identity);
+  return {
+    emailFromFrontend: normalizeEmail(emailFromFrontend),
+    resolvedEmail: normalizedIdentity.email || null,
+    userId: normalizedIdentity.userId || null,
+    plan: plan || usageRow?.plan || null,
+    usageRowId: usageRow?.id || null,
+    isEmailConfirmed: authUser ? Boolean(authUser.email_confirmed_at || authUser.confirmed_at) : null,
+    emailConfirmedAt: authUser?.email_confirmed_at || null,
+    confirmedAt: authUser?.confirmed_at || null,
+    lastSignInAt: authUser?.last_sign_in_at || null,
+    identitySource: normalizedIdentity.identitySource || null,
+    ...extra
+  };
+}
+
+function buildUsageDebugPayload(user = {}, extra = {}) {
+  const usage = formatSubscriptionUsage(user || {});
+  return {
+    actionsUsed: Number(usage.actions_used || 0),
+    actionsLimit: Number(usage.actions_limit || 0),
+    premiumChatUsed: Number(usage.premium_chat_used || 0),
+    advancedActionsUsed: Number(usage.advanced_actions_used || usage.premium_chat_used || 0),
+    advancedActionsLimit: Number(usage.advanced_actions_limit || usage.premium_chat_limit || 0),
+    advancedActionsRemaining: Number(usage.advanced_actions_remaining || usage.advancedActionsRemaining || 0),
+    ...extra
+  };
+}
+
+async function logAuthDebug(context = {}) {
+  console.log("[AUTH DEBUG]", context);
+}
+
+function logUsageDebug(context = {}) {
+  console.log("[USAGE DEBUG]", context);
+}
+
 function hasUnlimitedAgencyOverride(email = "") {
   return TEMP_UNLIMITED_AGENCY_EMAILS.has(normalizeEmail(email));
 }
@@ -445,6 +603,14 @@ function getPremiumLimits(plan = "free") {
   return PREMIUM_LIMITS[normalizePlan(plan)] || PREMIUM_LIMITS.free;
 }
 
+function normalizeAdvancedChatCounterKey(counterKey = "") {
+  const normalized = String(counterKey || "").trim();
+  if (!normalized) return "";
+  if (normalized === "premium_chat_used" || normalized === "premiumChatUsed") return "advanced_actions_used";
+  if (normalized === "advancedActionsUsed" || normalized === "advanced_actions" || normalized === "advancedActions") return "advanced_actions_used";
+  return normalized;
+}
+
 function normalizeTaskType(taskType = "chat_basic") {
   const normalizedTaskType = String(taskType || "chat_basic").trim().toLowerCase();
   return AI_TASK_ROUTING[normalizedTaskType] ? normalizedTaskType : "chat_basic";
@@ -497,8 +663,10 @@ async function resolveAiRoutingForRequest(req, options = {}) {
   const taskType = normalizeTaskType(incomingTaskType);
   const route = AI_TASK_ROUTING[taskType] || AI_TASK_ROUTING.chat_basic;
   const maxTokens = clampMaxTokens(req.body?.max_tokens || routing.maxTokens, taskType);
-  const email = getEmailFromChatRequest(req, routing);
   const planType = getPlanTypeFromChatRequest(req, routing);
+  const identityRequest = getIdentityFromRequest(req, routing);
+  const authContext = await resolveIdentityContext(identityRequest, planType);
+  const email = authContext.email || getEmailFromChatRequest(req, routing);
   const requestedModel = req.body?.model || routing.selectedModel || "";
   const tracePdfFlow = isPdfFlowTask(incomingTaskType) || isPdfFlowTask(taskType);
   const premiumAuditRouteRequested = String(incomingTaskType || "").trim().toLowerCase() === "premium_reasoning_audit";
@@ -527,6 +695,20 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     });
   }
 
+  await logAuthDebug(buildAuthDebugPayload({
+    emailFromFrontend: getEmailFromChatRequest(req, routing),
+    identity: authContext,
+    plan: planType,
+    authUser: authContext.authUser,
+    extra: {
+      route: "chat",
+      taskType: incomingTaskType,
+      resolvedTask: taskType,
+      requestedModel,
+      isEmailConfirmed: authContext.isEmailConfirmed
+    }
+  }));
+
   logPdfFlow("resolve:start", {
     provider: route.provider || ZENTRA_BASE_PROVIDER,
     resolvedModel: route.model || ZENTRA_BASE_MODEL,
@@ -546,8 +728,21 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     premiumAvailable: false,
     premiumActive: false,
     premiumConsumed: false,
+    premiumAllowed: false,
+    premiumQuotaAvailable: false,
+    premiumFallbackReason: null,
     counterKey: route.counterKey || null,
+    advancedActionsUsed: 0,
+    advancedActionsLimit: 0,
+    advancedActionsRemaining: 0,
     planType,
+    userId: authContext.userId || null,
+    authUserId: authContext.userId || null,
+    identitySource: authContext.identitySource || null,
+    isEmailConfirmed: authContext.isEmailConfirmed,
+    emailConfirmedAt: authContext.emailConfirmedAt || null,
+    confirmedAt: authContext.confirmedAt || null,
+    lastSignInAt: authContext.lastSignInAt || null,
     reason: "base_model"
   };
 
@@ -600,19 +795,6 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     };
   }
 
-  if (taskType === "chat_premium") {
-    return {
-      ...resolved,
-      provider: premiumProvider,
-      model: premiumModel,
-      premiumAvailable: true,
-      premiumActive: true,
-      premiumConsumed: false,
-      counterKey: null,
-      reason: "chat_premium_included"
-    };
-  }
-
   if (planType === "audit" && ["pdf_summary", "pdf_polish", "premium_reasoning_audit"].includes(taskType)) {
     if (hasUnlimitedAgencyOverride(email)) {
       const resolvedAuditPremium = {
@@ -635,7 +817,7 @@ async function resolveAiRoutingForRequest(req, options = {}) {
       return resolvedAuditPremium;
     }
 
-    const auditUser = await getUserByEmail(email, "audit");
+    const auditUser = await getUserByIdentity(authContext, "audit");
     const plan = normalizePlan(auditUser?.plan);
     const credits = Number(auditUser?.audit_credits || 0);
     const used = Number(auditUser?.audit_credits_used || 0);
@@ -676,7 +858,7 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     return resolvedAuditPremium;
   }
 
-  const user = await ensureFreshSubscriptionUsage(email);
+  const user = await ensureFreshSubscriptionUsage(authContext);
   const plan = hasUnlimitedAgencyOverride(email) ? "agency" : normalizePlan(user?.plan);
   const allowedPlans = route.allowedPlans || [];
 
@@ -694,6 +876,42 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     };
   }
 
+  const usage = formatSubscriptionUsage(user);
+  const limitMap = {
+    premium_chat_used: usage.premium_chat_limit,
+    advanced_actions_used: usage.advanced_actions_limit ?? usage.premium_chat_limit,
+    premium_pdf_used: usage.premium_pdf_limit
+  };
+  const currentUsed = normalizeCounterValue(usage[route.counterKey] ?? user[route.counterKey]);
+  const limit = normalizeCounterValue(limitMap[route.counterKey]);
+  const premiumQuotaAvailable = route.counterKey ? currentUsed < limit : false;
+  const premiumFallbackReason = premiumQuotaAvailable ? null : "advanced_quota_exceeded";
+
+  if (route.counterKey === "advanced_actions_used" && !premiumQuotaAvailable) {
+    logPdfFlow("resolve:advanced_quota_exceeded", {
+      provider: resolved.provider,
+      resolvedModel: resolved.model,
+      reason: premiumFallbackReason,
+      plan,
+      used: currentUsed,
+      limit
+    });
+    return {
+      ...resolved,
+      plan,
+      premiumAvailable: true,
+      premiumActive: false,
+      premiumConsumed: false,
+      premiumAllowed: false,
+      premiumQuotaAvailable: false,
+      premiumFallbackReason,
+      advancedActionsUsed: currentUsed,
+      advancedActionsLimit: limit,
+      advancedActionsRemaining: 0,
+      reason: premiumFallbackReason
+    };
+  }
+
   if (!consumePremium) {
     if (hasUnlimitedAgencyOverride(email)) {
       const previewPremium = {
@@ -704,6 +922,9 @@ async function resolveAiRoutingForRequest(req, options = {}) {
         premiumAvailable: true,
         premiumActive: false,
         premiumConsumed: false,
+        premiumAllowed: true,
+        premiumQuotaAvailable: true,
+        premiumFallbackReason: null,
         reason: "premium_available_unlimited_override"
       };
       logPdfFlow("resolve:premium_available_unlimited_override", {
@@ -715,14 +936,6 @@ async function resolveAiRoutingForRequest(req, options = {}) {
       return previewPremium;
     }
 
-    const usage = formatSubscriptionUsage(user);
-    const limitMap = {
-      premium_chat_used: usage.premium_chat_limit,
-      premium_pdf_used: usage.premium_pdf_limit
-    };
-    const currentUsed = normalizeCounterValue(user[route.counterKey]);
-    const limit = normalizeCounterValue(limitMap[route.counterKey]);
-
     if (currentUsed >= limit) {
       logPdfFlow("resolve:premium_limit_reached_preview", {
         provider: resolved.provider,
@@ -733,6 +946,12 @@ async function resolveAiRoutingForRequest(req, options = {}) {
       return {
         ...resolved,
         plan,
+        premiumAllowed: false,
+        premiumQuotaAvailable: false,
+        premiumFallbackReason,
+        advancedActionsUsed: currentUsed,
+        advancedActionsLimit: limit,
+        advancedActionsRemaining: 0,
         reason: "premium_limit_reached"
       };
     }
@@ -745,6 +964,12 @@ async function resolveAiRoutingForRequest(req, options = {}) {
       premiumAvailable: true,
       premiumActive: false,
       premiumConsumed: false,
+      premiumAllowed: true,
+      premiumQuotaAvailable: true,
+      premiumFallbackReason: null,
+      advancedActionsUsed: currentUsed,
+      advancedActionsLimit: limit,
+      advancedActionsRemaining: Math.max(limit - currentUsed, 0),
       reason: "premium_available"
     };
     logPdfFlow("resolve:premium_available", {
@@ -756,7 +981,7 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     return previewPremium;
   }
 
-  const premiumUsage = await consumeSubscriptionUsage(email, route.counterKey);
+  const premiumUsage = await consumeSubscriptionUsage(authContext, route.counterKey);
   if (!premiumUsage.allowed) {
     logPdfFlow("resolve:premium_limit_reached", {
       provider: resolved.provider,
@@ -764,9 +989,15 @@ async function resolveAiRoutingForRequest(req, options = {}) {
       reason: premiumUsage.reason || "premium_limit_reached",
       plan
     });
-    return {
-      ...resolved,
-      plan,
+  return {
+    ...resolved,
+    plan,
+      premiumAllowed: false,
+      premiumQuotaAvailable: false,
+      premiumFallbackReason: premiumUsage.reason || premiumFallbackReason,
+      advancedActionsUsed: currentUsed,
+      advancedActionsLimit: limit,
+      advancedActionsRemaining: Math.max(limit - currentUsed, 0),
       reason: premiumUsage.reason || "premium_limit_reached"
     };
   }
@@ -779,6 +1010,12 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     premiumAvailable: true,
     premiumActive: true,
     premiumConsumed: true,
+    premiumAllowed: true,
+    premiumQuotaAvailable: true,
+    premiumFallbackReason: null,
+    advancedActionsUsed: currentUsed + 1,
+    advancedActionsLimit: limit,
+    advancedActionsRemaining: Math.max(limit - (currentUsed + 1), 0),
     reason: "premium_authorized"
   };
   logPdfFlow("resolve:premium_authorized", {
@@ -1031,8 +1268,13 @@ function verifyLemonSignature(req) {
 
 async function upsertUserAccess(userData = {}) {
   const client = getSupabaseClient();
+  const normalizedIdentity = normalizeIdentityInput({
+    email: userData.email || userData.customer_email || "",
+    userId: userData.auth_user_id || userData.user_id || ""
+  });
   const payload = {
-    email: userData.email,
+    email: normalizedIdentity.email,
+    auth_user_id: normalizedIdentity.userId || null,
     plan: normalizePlan(userData.plan),
     plan_type: userData.plan_type,
     status: userData.status,
@@ -1053,12 +1295,31 @@ async function upsertUserAccess(userData = {}) {
     updated_at: new Date().toISOString()
   };
 
+  const normalizedPlanType = payload.plan_type === "audit" ? "audit" : "subscription";
+  const existingUser = await getUserByIdentity({
+    email: payload.email,
+    userId: payload.auth_user_id
+  }, normalizedPlanType);
+
+  if (existingUser?.id) {
+    const { data, error } = await client
+      .from("users")
+      .update(payload)
+      .eq("id", existingUser.id)
+      .select(USER_ACCESS_SELECT_FIELDS)
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return data;
+  }
+
   const { data, error } = await client
     .from("users")
-    .upsert(payload, {
-      onConflict: "email,plan_type"
-    })
-    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, extra_actions_balance, extra_audits_balance, extra_actions_used_cycle, extra_audits_used_cycle, extra_actions_purchased_total, extra_audits_purchased_total, purchase_history, billing_cycle_start, updated_at")
+    .insert(payload)
+    .select(USER_ACCESS_SELECT_FIELDS)
     .single();
 
   if (error) {
@@ -1068,25 +1329,105 @@ async function upsertUserAccess(userData = {}) {
   return data;
 }
 
-async function getUserByEmail(email, planType = "subscription") {
+async function getUserByIdentity(identityOrEmail = {}, planType = "subscription") {
   const client = getSupabaseClient();
-  const { data, error } = await client
-    .from("users")
-    .select("email, plan, plan_type, status, audit_credits, audit_credits_used, actions_used, audits_used, premium_chat_used, premium_pdf_used, extra_actions_balance, extra_audits_balance, extra_actions_used_cycle, extra_audits_used_cycle, extra_actions_purchased_total, extra_audits_purchased_total, purchase_history, billing_cycle_start, updated_at")
-    .eq("email", email)
-    .eq("plan_type", planType)
-    .maybeSingle();
+  const identity = normalizeIdentityInput(identityOrEmail);
+  const normalizedPlanType = String(planType || "subscription").trim().toLowerCase() === "audit" ? "audit" : "subscription";
+  const matches = [];
 
-  if (error) {
-    throw error;
+  if (identity.userId) {
+    const authQuery = await client
+      .from("users")
+      .select(USER_ACCESS_SELECT_FIELDS)
+      .eq("auth_user_id", identity.userId)
+      .eq("plan_type", normalizedPlanType)
+      .order("updated_at", { ascending: false })
+      .limit(5);
+    if (authQuery.error) {
+      throw authQuery.error;
+    }
+    if (Array.isArray(authQuery.data)) {
+      matches.push(...authQuery.data);
+    }
   }
 
-  return data;
+  if (identity.email) {
+    const emailQuery = await client
+      .from("users")
+      .select(USER_ACCESS_SELECT_FIELDS)
+      .eq("email", identity.email)
+      .eq("plan_type", normalizedPlanType)
+      .order("updated_at", { ascending: false })
+      .limit(5);
+    if (emailQuery.error) {
+      throw emailQuery.error;
+    }
+    if (Array.isArray(emailQuery.data)) {
+      matches.push(...emailQuery.data);
+    }
+  }
+
+  const dedupedRows = [];
+  const seenIds = new Set();
+  for (const row of matches) {
+    const rowId = String(row?.id || "");
+    if (!rowId || seenIds.has(rowId)) continue;
+    seenIds.add(rowId);
+    dedupedRows.push(row);
+  }
+
+  if (dedupedRows.length > 1) {
+    console.warn("[AUTH DEBUG] duplicate_usage_rows", {
+      planType: normalizedPlanType,
+      identity: {
+        email: identity.email || null,
+        userId: identity.userId || null,
+        identitySource: identity.identitySource || null
+      },
+      rowIds: dedupedRows.map((row) => row.id)
+    });
+  }
+
+  return dedupedRows.sort((left, right) => {
+    const leftAuthMatch = identity.userId && normalizeAuthUserId(left?.auth_user_id) === identity.userId ? 1 : 0;
+    const rightAuthMatch = identity.userId && normalizeAuthUserId(right?.auth_user_id) === identity.userId ? 1 : 0;
+
+    if (leftAuthMatch !== rightAuthMatch) {
+      return rightAuthMatch - leftAuthMatch;
+    }
+
+    const leftPremiumUsage = normalizeCounterValue(left?.premium_chat_used || left?.advanced_actions_used || 0);
+    const rightPremiumUsage = normalizeCounterValue(right?.premium_chat_used || right?.advanced_actions_used || 0);
+    if (leftPremiumUsage !== rightPremiumUsage) {
+      return rightPremiumUsage - leftPremiumUsage;
+    }
+
+    const leftBaseActions = normalizeCounterValue(left?.actions_used || 0);
+    const rightBaseActions = normalizeCounterValue(right?.actions_used || 0);
+    if (leftBaseActions !== rightBaseActions) {
+      return rightBaseActions - leftBaseActions;
+    }
+
+    const leftUpdated = new Date(left?.updated_at || 0).getTime();
+    const rightUpdated = new Date(right?.updated_at || 0).getTime();
+    return rightUpdated - leftUpdated;
+  })[0] || null;
 }
 
-function getDefaultSubscriptionUser(email = "") {
+async function getUserByEmail(email, planType = "subscription") {
+  return getUserByIdentity({ email }, planType);
+}
+
+function getDefaultSubscriptionUser(identity = "") {
+  const normalizedIdentity = normalizeIdentityInput(identity);
   return {
-    email,
+    id: null,
+    email: normalizedIdentity.email,
+    auth_user_id: normalizedIdentity.userId || null,
+    is_email_confirmed: null,
+    email_confirmed_at: null,
+    confirmed_at: null,
+    last_sign_in_at: null,
     plan: "free",
     plan_type: "subscription",
     status: "active",
@@ -1103,7 +1444,8 @@ function getDefaultSubscriptionUser(email = "") {
     extra_actions_purchased_total: 0,
     extra_audits_purchased_total: 0,
     purchase_history: [],
-    billing_cycle_start: Date.now()
+    billing_cycle_start: Date.now(),
+    identity_source: normalizedIdentity.identitySource || (normalizedIdentity.userId ? "auth_user_id" : "email")
   };
 }
 
@@ -1234,6 +1576,9 @@ async function addCreditsByEmail(email, actions = 0, audits = 0, options = {}) {
 }
 
 function formatSubscriptionUsage(user = {}) {
+  const identitySource = String(user.identity_source || (user.auth_user_id ? "auth_user_id" : "email") || "").trim() || (user.auth_user_id ? "auth_user_id" : "email");
+  const normalizedAuthUserId = normalizeAuthUserId(user.auth_user_id);
+
   if (user.unlimited_agency || hasUnlimitedAgencyOverride(user.email)) {
     const actionsUsed = normalizeCounterValue(user.actions_used);
     const auditsUsed = normalizeCounterValue(user.audits_used);
@@ -1244,8 +1589,15 @@ function formatSubscriptionUsage(user = {}) {
     const premiumChatLimit = Math.max(TEMP_UNLIMITED_LIMIT, premiumChatUsed + 1000);
     const premiumPdfLimit = Math.max(TEMP_UNLIMITED_LIMIT, premiumPdfUsed + 1000);
 
-    return {
-      plan: "agency",
+  return {
+    id: user.id || null,
+    auth_user_id: normalizedAuthUserId || null,
+    identity_source: identitySource,
+    is_email_confirmed: user.is_email_confirmed ?? null,
+    email_confirmed_at: user.email_confirmed_at || null,
+    confirmed_at: user.confirmed_at || null,
+    last_sign_in_at: user.last_sign_in_at || null,
+    plan: "agency",
       plan_type: "subscription",
       status: "active",
       actions_used: actionsUsed,
@@ -1255,8 +1607,14 @@ function formatSubscriptionUsage(user = {}) {
       audits_limit: auditsLimit,
       audits_remaining: Math.max(auditsLimit - auditsUsed, 0),
       premium_chat_used: premiumChatUsed,
+      advanced_actions_used: premiumChatUsed,
+      advancedActionsUsed: premiumChatUsed,
       premium_chat_limit: premiumChatLimit,
+      advanced_actions_limit: premiumChatLimit,
+      advancedActionsLimit: premiumChatLimit,
       premium_chat_remaining: Math.max(premiumChatLimit - premiumChatUsed, 0),
+      advanced_actions_remaining: Math.max(premiumChatLimit - premiumChatUsed, 0),
+      advancedActionsRemaining: Math.max(premiumChatLimit - premiumChatUsed, 0),
       premium_pdf_used: premiumPdfUsed,
       premium_pdf_limit: premiumPdfLimit,
       premium_pdf_remaining: Math.max(premiumPdfLimit - premiumPdfUsed, 0),
@@ -1295,6 +1653,13 @@ function formatSubscriptionUsage(user = {}) {
   const auditsUsed = baseAuditsUsed + extraAuditsUsedCycle;
 
   return {
+    id: user.id || null,
+    auth_user_id: normalizedAuthUserId || null,
+    identity_source: identitySource,
+    is_email_confirmed: user.is_email_confirmed ?? null,
+    email_confirmed_at: user.email_confirmed_at || null,
+    confirmed_at: user.confirmed_at || null,
+    last_sign_in_at: user.last_sign_in_at || null,
     plan,
     plan_type: "subscription",
     status: user.status || "active",
@@ -1305,8 +1670,14 @@ function formatSubscriptionUsage(user = {}) {
     audits_limit: auditsLimit,
     audits_remaining: Math.max(auditsLimit - auditsUsed, 0),
     premium_chat_used: premiumChatUsed,
+    advanced_actions_used: premiumChatUsed,
+    advancedActionsUsed: premiumChatUsed,
     premium_chat_limit: premiumLimits.premium_chat_used,
+    advanced_actions_limit: premiumLimits.premium_chat_used,
+    advancedActionsLimit: premiumLimits.premium_chat_used,
     premium_chat_remaining: Math.max(premiumLimits.premium_chat_used - premiumChatUsed, 0),
+    advanced_actions_remaining: Math.max(premiumLimits.premium_chat_used - premiumChatUsed, 0),
+    advancedActionsRemaining: Math.max(premiumLimits.premium_chat_used - premiumChatUsed, 0),
     premium_pdf_used: premiumPdfUsed,
     premium_pdf_limit: premiumLimits.premium_pdf_used,
     premium_pdf_remaining: Math.max(premiumLimits.premium_pdf_used - premiumPdfUsed, 0),
@@ -1329,18 +1700,40 @@ function formatSubscriptionUsage(user = {}) {
   };
 }
 
-async function ensureFreshSubscriptionUsage(email) {
-  if (hasUnlimitedAgencyOverride(email)) {
-    const existingUser = await getUserByEmail(email, "subscription");
-    return applyUnlimitedAgencySubscriptionUser(email, existingUser || {});
+async function ensureFreshSubscriptionUsage(identityOrEmail) {
+  const identity = normalizeIdentityInput(identityOrEmail);
+
+  if (hasUnlimitedAgencyOverride(identity.email)) {
+    const existingUser = await getUserByIdentity(identity, "subscription");
+    const linkedUser = existingUser && identity.userId && normalizeAuthUserId(existingUser.auth_user_id) !== identity.userId
+      ? await upsertUserAccess({
+          ...existingUser,
+          email: existingUser.email || identity.email,
+          auth_user_id: identity.userId,
+          plan_type: "subscription",
+          status: existingUser.status || "active"
+        })
+      : existingUser;
+    return applyUnlimitedAgencySubscriptionUser(identity.email, linkedUser || getDefaultSubscriptionUser(identity));
   }
 
-  const existingUser = await getUserByEmail(email, "subscription");
-  const user = existingUser || getDefaultSubscriptionUser(email);
+  let existingUser = await getUserByIdentity(identity, "subscription");
+  let user = existingUser || getDefaultSubscriptionUser(identity);
+
+  if (existingUser && identity.userId && normalizeAuthUserId(existingUser.auth_user_id) !== identity.userId) {
+    user = await upsertUserAccess({
+      ...existingUser,
+      email: existingUser.email || identity.email,
+      auth_user_id: identity.userId,
+      plan_type: "subscription",
+      status: existingUser.status || "active"
+    });
+    existingUser = user;
+  }
 
   if (user.status === "cancelled") {
     return {
-      ...getDefaultSubscriptionUser(email),
+      ...getDefaultSubscriptionUser(identity),
       status: "cancelled"
     };
   }
@@ -1351,6 +1744,7 @@ async function ensureFreshSubscriptionUsage(email) {
       plan: user.plan || "free",
       plan_type: "subscription",
       status: user.status || "active",
+      auth_user_id: identity.userId || normalizeAuthUserId(user.auth_user_id) || null,
       actions_used: 0,
       audits_used: 0,
       premium_chat_used: 0,
@@ -1364,9 +1758,11 @@ async function ensureFreshSubscriptionUsage(email) {
   return user;
 }
 
-async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
-  if (hasUnlimitedAgencyOverride(email)) {
-    const user = await ensureFreshSubscriptionUsage(email);
+async function consumeSubscriptionUsage(identityOrEmail, counterKey = "actions_used") {
+  const identity = normalizeIdentityInput(identityOrEmail);
+
+  if (hasUnlimitedAgencyOverride(identity.email)) {
+    const user = await ensureFreshSubscriptionUsage(identity);
     return {
       allowed: true,
       reason: "unlimited_agency_override",
@@ -1374,15 +1770,16 @@ async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
     };
   }
 
-  const allowedCounters = new Set(["actions_used", "audits_used", "premium_chat_used", "premium_pdf_used"]);
-  if (!allowedCounters.has(counterKey)) {
+  const normalizedCounterKey = normalizeAdvancedChatCounterKey(counterKey);
+  const allowedCounters = new Set(["actions_used", "audits_used", "premium_chat_used", "premium_pdf_used", "advanced_actions_used"]);
+  if (!allowedCounters.has(normalizedCounterKey)) {
     return {
       allowed: false,
       reason: "invalid_counter"
     };
   }
 
-  const user = await ensureFreshSubscriptionUsage(email);
+  const user = await ensureFreshSubscriptionUsage(identity);
   if (!user || user.status !== "active") {
     return {
       allowed: false,
@@ -1400,9 +1797,11 @@ async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
   const currentExtraAuditsBalance = normalizeCounterValue(user.extra_audits_balance);
   const currentExtraActionsUsedCycle = normalizeCounterValue(user.extra_actions_used_cycle);
   const currentExtraAuditsUsedCycle = normalizeCounterValue(user.extra_audits_used_cycle);
-  const currentUsed = normalizeCounterValue(user[counterKey]);
+  const storageCounterKey = normalizedCounterKey === "advanced_actions_used" ? "premium_chat_used" : normalizedCounterKey;
+  const currentUsed = normalizeCounterValue(user[storageCounterKey]);
   const limitMap = {
     premium_chat_used: usage.premium_chat_limit,
+    advanced_actions_used: usage.advanced_actions_limit ?? usage.premium_chat_limit,
     premium_pdf_used: usage.premium_pdf_limit
   };
 
@@ -1439,18 +1838,38 @@ async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
       };
     }
   } else {
-    const limit = normalizeCounterValue(limitMap[counterKey]);
+    const limit = normalizeCounterValue(limitMap[normalizedCounterKey]);
     if (currentUsed >= limit) {
+      if (normalizedCounterKey === "advanced_actions_used") {
+        console.log("[USAGE ADVANCED ACTION]", {
+          email: identity.email || null,
+          userId: identity.userId || null,
+          plan: user?.plan || "free",
+          used: currentUsed,
+          limit,
+          reason: "usage_limit_reached"
+        });
+      }
       return {
         allowed: false,
         reason: "usage_limit_reached",
         user
       };
     }
-    nextUser[counterKey] = currentUsed + 1;
+    nextUser[storageCounterKey] = currentUsed + 1;
   }
 
   const savedUser = await upsertUserAccess(nextUser);
+
+  if (normalizedCounterKey === "advanced_actions_used") {
+    console.log("[USAGE ADVANCED ACTION]", {
+      email: identity.email || null,
+      userId: identity.userId || null,
+      plan: savedUser?.plan || user?.plan || "free",
+      used: normalizeCounterValue(savedUser?.premium_chat_used),
+      limit: normalizeCounterValue(limitMap.advanced_actions_used)
+    });
+  }
 
   return {
     allowed: true,
@@ -1459,10 +1878,11 @@ async function consumeSubscriptionUsage(email, counterKey = "actions_used") {
 }
 
 async function grantAuditAccess(paymentInfo = {}) {
-  const email = normalizeEmail(paymentInfo.email);
-  const existingUser = await getUserByEmail(email, "audit");
+  const identity = normalizeIdentityInput(paymentInfo);
+  const email = identity.email;
+  const existingUser = await getUserByIdentity(identity, "audit");
   const user = existingUser || {
-    ...getDefaultSubscriptionUser(email),
+    ...getDefaultSubscriptionUser(identity),
     plan: paymentInfo.plan,
     plan_type: "audit"
   };
@@ -1498,6 +1918,7 @@ async function grantAuditAccess(paymentInfo = {}) {
   const savedUser = await upsertUserAccess({
     ...user,
     email,
+    auth_user_id: identity.userId || normalizeAuthUserId(user.auth_user_id) || null,
     plan: paymentInfo.plan,
     plan_type: "audit",
     status: "active",
@@ -1518,16 +1939,18 @@ async function grantAuditAccess(paymentInfo = {}) {
 }
 
 async function consumeAuditCredit(email) {
-  if (hasUnlimitedAgencyOverride(email)) {
-    const user = await getUserByEmail(email, "audit");
+  const identity = normalizeIdentityInput(email);
+
+  if (hasUnlimitedAgencyOverride(identity.email)) {
+    const user = await getUserByIdentity(identity, "audit");
     return {
       allowed: true,
       reason: "unlimited_agency_override",
-      user: getUnlimitedAuditUsage(email, user || {})
+      user: getUnlimitedAuditUsage(identity.email, user || {})
     };
   }
 
-  const user = await getUserByEmail(email, "audit");
+  const user = await getUserByIdentity(identity, "audit");
 
   if (!user || user.status !== "active") {
     return {
@@ -1550,6 +1973,7 @@ async function consumeAuditCredit(email) {
 
   const savedUser = await upsertUserAccess({
     ...user,
+    auth_user_id: identity.userId || normalizeAuthUserId(user.auth_user_id) || null,
     audit_credits_used: used + 1,
     status: "active"
   });
@@ -2981,17 +3405,36 @@ app.post("/api/lemon/webhook", async (req, res) => {
 
 app.get("/api/user", async (req, res) => {
   try {
-    const email = normalizeEmail(req.query.email);
     const requestedPlanType = String(req.query.plan_type || "subscription").toLowerCase();
     const planType = requestedPlanType === "audit" ? "audit" : "subscription";
+    const identity = getIdentityFromRequest(req, {
+      email: req.query.email,
+      userId: req.query.user_id || req.query.auth_user_id,
+      identitySource: req.query.user_id || req.query.auth_user_id ? "query.user_id" : "query.email"
+    });
+    const authContext = await resolveIdentityContext(identity, planType);
+    const email = authContext.email || normalizeEmail(req.query.email);
 
-    if (!email) {
-      return res.status(400).json({ error: "email es requerido" });
+    if (!email && !authContext.userId) {
+      return res.status(400).json({ error: "email o user_id es requerido" });
     }
 
     const user = planType === "subscription"
-      ? await ensureFreshSubscriptionUsage(email)
-      : await getUserByEmail(email, planType);
+      ? await ensureFreshSubscriptionUsage(authContext)
+      : await getUserByIdentity(authContext, planType);
+
+    await logAuthDebug(buildAuthDebugPayload({
+      emailFromFrontend: req.query.email,
+      identity: authContext,
+      plan: user?.plan || planType,
+      usageRow: user,
+      authUser: authContext.authUser,
+      extra: {
+        route: "/api/user",
+        planType,
+        isEmailConfirmed: authContext.isEmailConfirmed
+      }
+    }));
 
     if (hasUnlimitedAgencyOverride(email)) {
       if (planType === "subscription") {
@@ -3075,14 +3518,36 @@ app.get("/api/user", async (req, res) => {
 
 app.get("/api/subscription/usage", async (req, res) => {
   try {
-    const email = normalizeEmail(req.query.email);
+    const identity = getIdentityFromRequest(req, {
+      email: req.query.email,
+      userId: req.query.user_id || req.query.auth_user_id,
+      identitySource: req.query.user_id || req.query.auth_user_id ? "query.user_id" : "query.email"
+    });
+    const authContext = await resolveIdentityContext(identity, "subscription");
+    const email = authContext.email || normalizeEmail(req.query.email);
 
-    if (!email) {
-      return res.status(400).json({ error: "email es requerido" });
+    if (!email && !authContext.userId) {
+      return res.status(400).json({ error: "email o user_id es requerido" });
     }
 
     if (hasUnlimitedAgencyOverride(email)) {
-      const user = await ensureFreshSubscriptionUsage(email);
+      const user = await ensureFreshSubscriptionUsage(authContext);
+      logAuthDebug(buildAuthDebugPayload({
+        emailFromFrontend: req.query.email,
+        identity: authContext,
+        plan: user?.plan || "agency",
+        usageRow: user,
+        authUser: authContext.authUser,
+        extra: {
+          route: "/api/subscription/usage",
+          isEmailConfirmed: authContext.isEmailConfirmed
+        }
+      }));
+      logUsageDebug(buildUsageDebugPayload(user, {
+        route: "/api/subscription/usage",
+        identitySource: authContext.identitySource || null,
+        userId: authContext.userId || null
+      }));
       return res.json({
         ...formatSubscriptionUsage(user),
         found: true,
@@ -3090,15 +3555,49 @@ app.get("/api/subscription/usage", async (req, res) => {
       });
     }
 
-    const user = await ensureFreshSubscriptionUsage(email);
+    const user = await ensureFreshSubscriptionUsage(authContext);
 
     if (!user || user.status === "cancelled") {
+      logAuthDebug(buildAuthDebugPayload({
+        emailFromFrontend: req.query.email,
+        identity: authContext,
+        plan: user?.plan || "free",
+        usageRow: user,
+        authUser: authContext.authUser,
+        extra: {
+          route: "/api/subscription/usage",
+          isEmailConfirmed: authContext.isEmailConfirmed
+        }
+      }));
+      logUsageDebug(buildUsageDebugPayload(user || getDefaultSubscriptionUser(authContext), {
+        route: "/api/subscription/usage",
+        identitySource: authContext.identitySource || null,
+        userId: authContext.userId || null,
+        reason: user?.status === "cancelled" ? "cancelled" : "not_found"
+      }));
       return res.json({
-        ...formatSubscriptionUsage(getDefaultSubscriptionUser(email)),
+        ...formatSubscriptionUsage(getDefaultSubscriptionUser(authContext)),
         status: user?.status || "active",
         found: Boolean(user)
       });
     }
+
+    await logAuthDebug(buildAuthDebugPayload({
+      emailFromFrontend: req.query.email,
+      identity: authContext,
+      plan: user?.plan || "free",
+      usageRow: user,
+      authUser: authContext.authUser,
+      extra: {
+        route: "/api/subscription/usage",
+        isEmailConfirmed: authContext.isEmailConfirmed
+      }
+    }));
+    await logUsageDebug(buildUsageDebugPayload(user, {
+      route: "/api/subscription/usage",
+      identitySource: authContext.identitySource || null,
+      userId: authContext.userId || null
+    }));
 
     return res.json({
       ...formatSubscriptionUsage(user),
@@ -3112,18 +3611,41 @@ app.get("/api/subscription/usage", async (req, res) => {
 
 app.get("/api/subscription/capacity/offers", async (req, res) => {
   try {
-    const email = normalizeEmail(req.query.email);
+    const identity = getIdentityFromRequest(req, {
+      email: req.query.email,
+      userId: req.query.user_id || req.query.auth_user_id,
+      identitySource: req.query.user_id || req.query.auth_user_id ? "query.user_id" : "query.email"
+    });
+    const authContext = await resolveIdentityContext(identity, "subscription");
+    const email = authContext.email || normalizeEmail(req.query.email);
 
-    if (!email) {
-      return res.status(400).json({ error: "email es requerido" });
+    if (!email && !authContext.userId) {
+      return res.status(400).json({ error: "email o user_id es requerido" });
     }
 
-    const user = await ensureFreshSubscriptionUsage(email);
-    const usage = formatSubscriptionUsage(user || getDefaultSubscriptionUser(email));
+    const user = await ensureFreshSubscriptionUsage(authContext);
+    const usage = formatSubscriptionUsage(user || getDefaultSubscriptionUser(authContext));
     const isAgency = normalizePlan(user?.plan || "free") === "agency" && String(user?.status || "active") === "active";
     const offers = isAgency
       ? AGENCY_CAPACITY_PACKS.map((pack) => serializeAgencyCapacityPack(pack))
       : [];
+
+    await logAuthDebug(buildAuthDebugPayload({
+      emailFromFrontend: req.query.email,
+      identity: authContext,
+      plan: user?.plan || "free",
+      usageRow: user,
+      authUser: authContext.authUser,
+      extra: {
+        route: "/api/subscription/capacity/offers",
+        isEmailConfirmed: authContext.isEmailConfirmed
+      }
+    }));
+    await logUsageDebug(buildUsageDebugPayload(user, {
+      route: "/api/subscription/capacity/offers",
+      identitySource: authContext.identitySource || null,
+      userId: authContext.userId || null
+    }));
 
     return res.json({
       available: offers.length > 0,
@@ -3139,23 +3661,65 @@ app.get("/api/subscription/capacity/offers", async (req, res) => {
 
 app.post("/api/subscription/consume", async (req, res) => {
   try {
-    const email = normalizeEmail(req.body?.email);
+    const identity = getIdentityFromRequest(req);
+    const authContext = await resolveIdentityContext(identity, "subscription");
+    const email = authContext.email || normalizeEmail(req.body?.email);
     const counterKey = String(req.body?.counter || "actions_used").trim();
 
-    if (!email) {
-      return res.status(400).json({ error: "email es requerido" });
+    if (!email && !authContext.userId) {
+      return res.status(400).json({ error: "email o user_id es requerido" });
     }
 
-    const result = await consumeSubscriptionUsage(email, counterKey);
+    const result = await consumeSubscriptionUsage(authContext, counterKey);
 
     if (!result.allowed) {
-      const fallbackUser = result.user || await ensureFreshSubscriptionUsage(email);
+      const fallbackUser = result.user || await ensureFreshSubscriptionUsage(authContext);
+      await logAuthDebug(buildAuthDebugPayload({
+        emailFromFrontend: req.body?.email,
+        identity: authContext,
+        plan: fallbackUser?.plan || "free",
+        usageRow: fallbackUser,
+        authUser: authContext.authUser,
+        extra: {
+          route: "/api/subscription/consume",
+          counterKey,
+          isEmailConfirmed: authContext.isEmailConfirmed
+        }
+      }));
+      await logUsageDebug(buildUsageDebugPayload(fallbackUser || getDefaultSubscriptionUser(authContext), {
+        route: "/api/subscription/consume",
+        identitySource: authContext.identitySource || null,
+        userId: authContext.userId || null,
+        counterKey,
+        allowed: false,
+        reason: result.reason
+      }));
       return res.status(403).json({
         allowed: false,
         reason: result.reason,
-        ...formatSubscriptionUsage(fallbackUser || getDefaultSubscriptionUser(email))
+        ...formatSubscriptionUsage(fallbackUser || getDefaultSubscriptionUser(authContext))
       });
     }
+
+    await logAuthDebug(buildAuthDebugPayload({
+      emailFromFrontend: req.body?.email,
+      identity: authContext,
+      plan: result.user?.plan || "free",
+      usageRow: result.user,
+      authUser: authContext.authUser,
+      extra: {
+        route: "/api/subscription/consume",
+        counterKey,
+        isEmailConfirmed: authContext.isEmailConfirmed
+      }
+    }));
+    await logUsageDebug(buildUsageDebugPayload(result.user, {
+      route: "/api/subscription/consume",
+      identitySource: authContext.identitySource || null,
+      userId: authContext.userId || null,
+      counterKey,
+      allowed: true
+    }));
 
     return res.json({
       allowed: true,
@@ -3169,15 +3733,35 @@ app.post("/api/subscription/consume", async (req, res) => {
 
 app.post("/api/audit/consume", async (req, res) => {
   try {
-    const email = normalizeEmail(req.body?.email);
+    const identity = getIdentityFromRequest(req);
+    const authContext = await resolveIdentityContext(identity, "audit");
+    const email = authContext.email || normalizeEmail(req.body?.email);
 
-    if (!email) {
-      return res.status(400).json({ error: "email es requerido" });
+    if (!email && !authContext.userId) {
+      return res.status(400).json({ error: "email o user_id es requerido" });
     }
 
-    const result = await consumeAuditCredit(email);
+    const result = await consumeAuditCredit(authContext);
 
     if (!result.allowed) {
+      await logAuthDebug(buildAuthDebugPayload({
+        emailFromFrontend: req.body?.email,
+        identity: authContext,
+        plan: result.user?.plan || "free",
+        usageRow: result.user,
+        authUser: authContext.authUser,
+        extra: {
+          route: "/api/audit/consume",
+          isEmailConfirmed: authContext.isEmailConfirmed
+        }
+      }));
+      await logUsageDebug(buildUsageDebugPayload(result.user || getDefaultSubscriptionUser(authContext), {
+        route: "/api/audit/consume",
+        identitySource: authContext.identitySource || null,
+        userId: authContext.userId || null,
+        allowed: false,
+        reason: result.reason
+      }));
       return res.status(403).json({
         allowed: false,
         reason: result.reason,
@@ -3194,6 +3778,23 @@ app.post("/api/audit/consume", async (req, res) => {
     }
 
     const user = result.user;
+    await logAuthDebug(buildAuthDebugPayload({
+      emailFromFrontend: req.body?.email,
+      identity: authContext,
+      plan: user?.plan || "free",
+      usageRow: user,
+      authUser: authContext.authUser,
+      extra: {
+        route: "/api/audit/consume",
+        isEmailConfirmed: authContext.isEmailConfirmed
+      }
+    }));
+    await logUsageDebug(buildUsageDebugPayload(user, {
+      route: "/api/audit/consume",
+      identitySource: authContext.identitySource || null,
+      userId: authContext.userId || null,
+      allowed: true
+    }));
     const auditCredits = Number(user.audit_credits || 0);
     const auditCreditsUsed = Number(user.audit_credits_used || 0);
 
@@ -3349,6 +3950,9 @@ app.post("/api/chat/stream", async (req, res) => {
       premiumActive: false,
       premiumConsumed: false,
       counterKey: premiumPreview.counterKey || null,
+      advancedActionsUsed: Number(premiumPreview.advancedActionsUsed || 0),
+      advancedActionsLimit: Number(premiumPreview.advancedActionsLimit || 0),
+      advancedActionsRemaining: Number(premiumPreview.advancedActionsRemaining || 0),
       reason: requestedPremium && !premiumPreview.premiumAvailable
         ? (premiumPreview.reason || "fast_layer_only")
         : "fast_layer_only",
@@ -3385,13 +3989,33 @@ app.post("/api/chat/stream", async (req, res) => {
       };
 
       if (reasoningRouting.counterKey && reasoningRouting.planType !== "audit") {
-        const premiumUsage = await consumeSubscriptionUsage(reasoningRouting.email, reasoningRouting.counterKey);
+        const premiumUsage = await consumeSubscriptionUsage({
+          email: reasoningRouting.email,
+          userId: reasoningRouting.userId || reasoningRouting.authUserId,
+          auth_user_id: reasoningRouting.authUserId || reasoningRouting.userId,
+          identitySource: reasoningRouting.identitySource
+        }, reasoningRouting.counterKey);
         if (premiumUsage.allowed) {
+          const savedPremiumUsage = premiumUsage.user ? formatSubscriptionUsage(premiumUsage.user) : null;
+          const savedPremiumUsed = normalizeCounterValue(
+            savedPremiumUsage?.advanced_actions_used ??
+            savedPremiumUsage?.premium_chat_used ??
+            premiumUsage.user?.premium_chat_used ??
+            (Number(reasoningRouting.advancedActionsUsed || 0) + 1)
+          );
+          const savedPremiumLimit = normalizeCounterValue(
+            savedPremiumUsage?.advanced_actions_limit ??
+            savedPremiumUsage?.premium_chat_limit ??
+            reasoningRouting.advancedActionsLimit
+          );
           reasoningRouting = {
             ...reasoningRouting,
             premiumAvailable: true,
             premiumActive: true,
             premiumConsumed: true,
+            advancedActionsUsed: savedPremiumUsed,
+            advancedActionsLimit: savedPremiumLimit || Number(reasoningRouting.advancedActionsLimit || 0),
+            advancedActionsRemaining: Math.max((savedPremiumLimit || Number(reasoningRouting.advancedActionsLimit || 0)) - savedPremiumUsed, 0),
             reason: "premium_authorized"
           };
         } else {
@@ -3418,6 +4042,9 @@ app.post("/api/chat/stream", async (req, res) => {
         premiumAvailable: Boolean(reasoningRouting.premiumAvailable),
         premiumActive: Boolean(reasoningRouting.premiumActive),
         premiumConsumed: Boolean(reasoningRouting.premiumConsumed),
+        advancedActionsUsed: Number(reasoningRouting.advancedActionsUsed || finalRouting.advancedActionsUsed || 0),
+        advancedActionsLimit: Number(reasoningRouting.advancedActionsLimit || finalRouting.advancedActionsLimit || 0),
+        advancedActionsRemaining: Number(reasoningRouting.advancedActionsRemaining || finalRouting.advancedActionsRemaining || 0),
         reason: reasoningRouting.reason || finalRouting.reason
       };
 
@@ -3661,7 +4288,13 @@ app.post("/api/chat", async (req, res) => {
       requestedModel: req.body?.model || req.body?.zentra_routing?.selectedModel || null,
       selectedModel: aiRouting.model,
       provider: aiRouting.provider,
-      reason: aiRouting.reason
+      reason: aiRouting.reason,
+      premiumAllowed: Boolean(aiRouting.premiumAllowed),
+      premiumQuotaAvailable: Boolean(aiRouting.premiumQuotaAvailable),
+      premiumFallbackReason: aiRouting.premiumFallbackReason || null,
+      advancedActionsUsed: Number(aiRouting.advancedActionsUsed || 0),
+      advancedActionsLimit: Number(aiRouting.advancedActionsLimit || 0),
+      advancedActionsRemaining: Number(aiRouting.advancedActionsRemaining || 0)
     });
 
     const cleanMessages = sanitizeChatMessages(messages);
@@ -3799,7 +4432,13 @@ app.post("/api/chat", async (req, res) => {
       requestedModel: req.body?.model || req.body?.zentra_routing?.selectedModel || null,
       selectedModel: aiRouting.model,
       actualModel: result.model,
-      provider: result.provider
+      provider: result.provider,
+      premiumAllowed: Boolean(aiRouting.premiumAllowed),
+      premiumQuotaAvailable: Boolean(aiRouting.premiumQuotaAvailable),
+      premiumFallbackReason: aiRouting.premiumFallbackReason || null,
+      advancedActionsUsed: Number(aiRouting.advancedActionsUsed || 0),
+      advancedActionsLimit: Number(aiRouting.advancedActionsLimit || 0),
+      advancedActionsRemaining: Number(aiRouting.advancedActionsRemaining || 0)
     });
     if (traceResolvedPdfFlow) {
       logPdfTrace({
@@ -3830,7 +4469,13 @@ app.post("/api/chat", async (req, res) => {
         model: aiRouting.model,
         premiumActive: aiRouting.premiumActive,
         premiumConsumed: aiRouting.premiumConsumed,
+        premiumAllowed: aiRouting.premiumAllowed,
+        premiumQuotaAvailable: aiRouting.premiumQuotaAvailable,
+        premiumFallbackReason: aiRouting.premiumFallbackReason,
         counterKey: aiRouting.counterKey,
+        advancedActionsUsed: aiRouting.advancedActionsUsed,
+        advancedActionsLimit: aiRouting.advancedActionsLimit,
+        advancedActionsRemaining: aiRouting.advancedActionsRemaining,
         reason: aiRouting.reason,
         premiumFallbackError
       }
