@@ -3,6 +3,7 @@ import cors from "cors";
 import fetch, { File, FormData } from "node-fetch";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
+import { createCompetitiveSearchHandler } from "./release-competitive-search.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -3757,6 +3758,27 @@ app.post("/api/subscription/consume", async (req, res) => {
     return res.status(500).json({ error: "Error consumiendo uso de suscripcion" });
   }
 });
+
+async function requireCompetitiveSearchSession(req, res, next) {
+  const match = /^Bearer ([^\s]+)$/i.exec(req.get("Authorization") || "");
+  if (!match) return res.status(401).json({ error: "Iniciá sesión para continuar." });
+  if (!supabase) return res.status(503).json({ error: "Servicio temporalmente no disponible." });
+  try {
+    const { data, error } = await supabase.auth.getUser(match[1]);
+    const user = data?.user;
+    if (error || !user?.id || !user.email || !(user.email_confirmed_at || user.confirmed_at)) {
+      return res.status(401).json({ error: "Tu sesión no es válida. Iniciá sesión nuevamente." });
+    }
+    req.auth = { userId: user.id, email: user.email.trim().toLowerCase() };
+    return next();
+  } catch (_) {
+    return res.status(503).json({ error: "No se pudo verificar la sesión. Intentá nuevamente." });
+  }
+}
+
+app.post("/api/audit/competitive-search", requireCompetitiveSearchSession, createCompetitiveSearchHandler({
+  apiKey: process.env.OPENAI_SEARCH_API_KEY || OPENAI_API_KEY, fetchImpl: fetch
+}));
 
 app.post("/api/audit/consume", async (req, res) => {
   try {
