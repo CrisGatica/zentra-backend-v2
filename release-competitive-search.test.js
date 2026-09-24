@@ -61,6 +61,8 @@ test("authenticated search uses existing key, bounds calls, and caches identical
     const body = JSON.parse(options.body);
     assert.equal(body.tool_choice, "required");
     assert.equal(body.max_tool_calls, 3);
+    assert.match(body.instructions, /actividad principal/);
+    assert.match(body.instructions, /hasta tres negocios distintos/);
     assert.equal(body.input.includes("Pueblo Libre"), true);
     return { ok: true, json: async () => validData };
   } });
