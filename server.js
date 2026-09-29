@@ -4,6 +4,7 @@ import fetch, { File, FormData } from "node-fetch";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { createCompetitiveSearchHandler } from "./release-competitive-search.js";
+import { recoverAuditConsultative } from "./release-audit-json.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -2425,6 +2426,9 @@ function buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temp
     input: sanitized.input,
     max_output_tokens: maxTokens
   };
+  if (requestContext.taskType === "seo_analysis" && /^gpt-5(?:[.-]|$)/i.test(model)) {
+    body.reasoning = { effort: "low" };
+  }
 
   if (responseFormat?.type === "json_object") {
     body.text = { format: { type: "json_object" } };
@@ -2489,7 +2493,9 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
         coerced: responseBody.sanitizerStats.coerced,
         dropped: responseBody.sanitizerStats.dropped
       } : null,
-      summary: summarizeOpenAIResponsesInputForLog(body.input)
+      summary: requestContext.taskType === "seo_analysis"
+        ? body.input.map(item => ({ role: item.role, contentTypes: item.content.map(part => part.type) }))
+        : summarizeOpenAIResponsesInputForLog(body.input)
     });
 
     if (responseBody.sanitizerStats?.fixedAssistantInputText) {
@@ -2508,7 +2514,8 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
       "Authorization": `Bearer ${OPENAI_API_KEY}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    ...(requestContext.auditRecovery ? { signal: AbortSignal.timeout(45000) } : {})
   });
   const data = await response.json().catch(() => ({}));
 
@@ -2522,7 +2529,7 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
   };
 }
 
-async function callAnthropic({ model, messages, temperature, maxTokens }) {
+async function callAnthropic({ model, messages, temperature, maxTokens, requestContext = {} }) {
   if (!ANTHROPIC_API_KEY) {
     return {
       ok: false,
@@ -2545,7 +2552,8 @@ async function callAnthropic({ model, messages, temperature, maxTokens }) {
       messages,
       temperature,
       maxTokens
-    }))
+    })),
+    ...(requestContext.auditRecovery ? { signal: AbortSignal.timeout(45000) } : {})
   });
   const data = await response.json().catch(() => ({}));
 
@@ -2626,7 +2634,7 @@ async function callAiProvider({ provider, model, messages, responseFormat, tempe
   const normalizedProvider = normalizeProvider(provider);
 
   if (normalizedProvider === "anthropic") {
-    return callAnthropic({ model, messages, temperature, maxTokens });
+    return callAnthropic({ model, messages, temperature, maxTokens, requestContext });
   }
 
   return callOpenAI({ model, messages, responseFormat, temperature, maxTokens, requestContext: {
@@ -4474,8 +4482,27 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    const content = getAiResponseText(result);
-    const parsed = parseJsonSafely(content);
+    // Recovery stays within this request: it never calls the crawl or a quota endpoint.
+    const consultative = aiRouting.taskType === "seo_analysis" ? await recoverAuditConsultative({
+      initial: result,
+      regenerate: () => callAiProvider({
+        provider: aiRouting.provider,
+        model: aiRouting.model,
+        messages: providerMessages,
+        responseFormat: response_format,
+        temperature,
+        maxTokens: 4096,
+        requestContext: { ...requestContext, auditRecovery: true }
+      }),
+      debug: process.env.NODE_ENV !== "production" && process.env.ZENTRA_AUDIT_JSON_DEBUG === "true",
+      log: diagnostic => console.log("[AUDIT JSON]", diagnostic)
+    }) : null;
+    const consultativeResponse = consultative ? (consultative.analysis || {
+      consultativeStatus: "consultative-degraded",
+      summary: "El analisis consultivo no estuvo disponible. Se conservan las comprobaciones tecnicas del sitio."
+    }) : null;
+    const content = consultative ? JSON.stringify(consultativeResponse) : getAiResponseText(result);
+    const parsed = consultative ? consultativeResponse : parseJsonSafely(content);
     console.log("[ZENTRA MODEL] OPENAI RESPONSE MODEL:", {
       taskType: aiRouting.taskType,
       requestedModel: req.body?.model || req.body?.zentra_routing?.selectedModel || null,
@@ -4508,6 +4535,7 @@ app.post("/api/chat", async (req, res) => {
       success: true,
       analysis: parsed,
       raw_content: content,
+      ...(consultative ? { audit_consultative: consultative.metadata } : {}),
       usage: getAiUsage(result),
       provider: result.provider,
       model: result.model,
