@@ -3,13 +3,27 @@ import cors from "cors";
 import fetch, { File, FormData } from "node-fetch";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
+import { createApiSecurity, createCorsOptions, publicStreamEvent } from "./release-security.js";
+import { configureHttpProxy, createHttpBoundary, createDistributedRateLimit, minimalHealth, publicHttpError } from "./release-http-boundary.js";
+import { createOperationGuard, operationContext } from "./release-operations.js";
+import { validateAudioInput, parseAudioTranscript, fetchAudioResponse } from "./release-audio.js";
+import { createCompetitiveSearchHandler } from "./release-competitive-search.js";
+import { createAuditSearchGuard } from "./release-audit-steps.js";
+import { createAuditAcquisitionHandler } from "./release-audit-acquisition.js";
+import { recoverAuditConsultative } from "./release-audit-json.js";
+import { createLemonHandlers } from "./release-lemon.js";
+import { CHAT_TIERS, isChatTask, chatTierRoute, chatRequestContext, chatTechnicalFallbackContext, chatCostTelemetry } from "./release-chat-routing.js";
+import { isAuditTask, auditTierRoute, auditTelemetryContext, auditCostTelemetry } from "./release-audit-routing.js";
 
 const app = express();
+app.disable("x-powered-by");
 const PORT = process.env.PORT || 3000;
 const LEMON_WEBHOOK_SECRET = process.env.LEMON_SQUEEZY_WEBHOOK_SECRET || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+// Desktop Beta requires an explicit opt-in; Chrome uses browser speech recognition.
+const ZENTRA_AUDIO_TRANSCRIPTION_ENABLED = String(process.env.ZENTRA_AUDIO_TRANSCRIPTION_ENABLED || "false").trim().toLowerCase() === "true";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const ANTHROPIC_API_VERSION = process.env.ANTHROPIC_API_VERSION || "2023-06-01";
 const ZENTRA_BASE_PROVIDER = normalizeProvider(process.env.ZENTRA_BASE_PROVIDER || "openai");
@@ -26,17 +40,15 @@ const ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS = Math.max(
   normalizeCounterValue(process.env.ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS || 900) || 900
 );
 const ZENTRA_EXECUTIVE_REFINER_TEMPERATURE = normalizeTemperature(process.env.ZENTRA_EXECUTIVE_REFINER_TEMPERATURE || 0.2);
-const ZENTRA_CHAT_FAST_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_FAST_PROVIDER || ZENTRA_BASE_PROVIDER);
-const ZENTRA_CHAT_FAST_MODEL = process.env.ZENTRA_CHAT_FAST_MODEL || ZENTRA_BASE_MODEL;
-const ZENTRA_CHAT_REASONING_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_REASONING_PROVIDER || ZENTRA_PREMIUM_PROVIDER);
-const ZENTRA_CHAT_REASONING_MODEL = process.env.ZENTRA_CHAT_REASONING_MODEL || ZENTRA_PREMIUM_MODEL;
+const ZENTRA_CHAT_FAST_PROVIDER = "openai";
+const ZENTRA_CHAT_FAST_MODEL = CHAT_TIERS.chat_base.model;
+const ZENTRA_CHAT_REASONING_PROVIDER = "openai";
+const ZENTRA_CHAT_REASONING_MODEL = CHAT_TIERS.chat_advanced.model;
 const ZENTRA_CHAT_REASONING_MAX_TOKENS = Math.max(
   512,
   normalizeCounterValue(process.env.ZENTRA_CHAT_REASONING_MAX_TOKENS || 1800) || 1800
 );
 const ZENTRA_CHAT_EXECUTIVE_ENABLED = String(process.env.ZENTRA_CHAT_EXECUTIVE_ENABLED || "false").trim().toLowerCase() !== "false";
-const ZENTRA_CHAT_EXECUTIVE_PROVIDER = normalizeProvider(process.env.ZENTRA_CHAT_EXECUTIVE_PROVIDER || ZENTRA_PREMIUM_FINAL_PROVIDER);
-const ZENTRA_CHAT_EXECUTIVE_MODEL = process.env.ZENTRA_CHAT_EXECUTIVE_MODEL || ZENTRA_PREMIUM_MODEL;
 const ZENTRA_CHAT_EXECUTIVE_MAX_TOKENS = Math.max(
   256,
   normalizeCounterValue(process.env.ZENTRA_CHAT_EXECUTIVE_MAX_TOKENS || 1200) || 1200
@@ -50,7 +62,11 @@ const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     })
   : null;
 
-app.use(cors());
+configureHttpProxy(app);
+app.use(createHttpBoundary());
+app.use(cors(createCorsOptions(process.env.ZENTRA_ALLOWED_ORIGINS)));
+app.use(createApiSecurity({ client: supabase, origins: process.env.ZENTRA_ALLOWED_ORIGINS }));
+app.use(createDistributedRateLimit({ client: supabase }));
 app.use(express.json({
   limit: "50mb",
   verify: (req, _res, buf) => {
@@ -58,11 +74,17 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use((req, res, next) => lemonHandlers.reconcile(req, res, next));
+app.use(createOperationGuard({ client: supabase, isUnlimited: email => hasUnlimitedAgencyOverride(email) }));
 
 const SUPPORTED_LEMON_EVENTS = new Set([
   "subscription_created",
   "subscription_updated",
   "subscription_cancelled",
+  "subscription_expired",
+  "subscription_resumed",
+  "subscription_paused",
+  "subscription_unpaused",
   "order_created"
 ]);
 
@@ -76,8 +98,8 @@ const PLAN_LIMITS = {
 const PREMIUM_LIMITS = {
   free: { premium_chat_used: 3, premium_pdf_used: 0 },
   starter: { premium_chat_used: 30, premium_pdf_used: 0 },
-  pro: { premium_chat_used: 100, premium_pdf_used: 30 },
-  agency: { premium_chat_used: 300, premium_pdf_used: 80 }
+  pro: { premium_chat_used: 100, premium_pdf_used: 10 },
+  agency: { premium_chat_used: 300, premium_pdf_used: 30 }
 };
 const TEMP_UNLIMITED_LIMIT = 999999;
 const TEMP_UNLIMITED_AGENCY_EMAILS = new Set([
@@ -108,46 +130,33 @@ const AI_TASK_ROUTING = {
     maxTokens: ZENTRA_CHAT_REASONING_MAX_TOKENS
   },
   seo_analysis: {
-    provider: ZENTRA_BASE_PROVIDER,
-    model: ZENTRA_BASE_MODEL,
+    ...auditTierRoute("seo_analysis"),
     premium: false,
     maxTokens: 2048
   },
   pdf_summary: {
-    provider: ZENTRA_PREMIUM_PROVIDER,
-    model: ZENTRA_PREMIUM_MODEL,
-    fallbackProvider: ZENTRA_BASE_PROVIDER,
-    fallbackModel: ZENTRA_BASE_MODEL,
+    ...auditTierRoute("pdf_summary", true),
     premium: true,
     counterKey: "premium_pdf_used",
     allowedPlans: ["pro", "agency"],
     maxTokens: 2200
   },
   pdf_polish: {
-    provider: ZENTRA_PREMIUM_PROVIDER,
-    model: ZENTRA_PREMIUM_MODEL,
-    fallbackProvider: ZENTRA_BASE_PROVIDER,
-    fallbackModel: ZENTRA_BASE_MODEL,
+    ...auditTierRoute("pdf_polish", true),
     premium: true,
     counterKey: "premium_pdf_used",
     allowedPlans: ["agency"],
     maxTokens: 3072
   },
   premium_reasoning_audit: {
-    provider: ZENTRA_PREMIUM_PROVIDER,
-    model: ZENTRA_PREMIUM_MODEL,
-    fallbackProvider: ZENTRA_BASE_PROVIDER,
-    fallbackModel: ZENTRA_BASE_MODEL,
+    ...auditTierRoute("premium_reasoning_audit", true),
     premium: true,
     counterKey: "premium_pdf_used",
     allowedPlans: ["pro", "agency"],
     maxTokens: 2200
   },
   executive_refiner_pdf: {
-    provider: ZENTRA_EXECUTIVE_REFINER_PROVIDER,
-    model: ZENTRA_EXECUTIVE_REFINER_MODEL,
-    fallbackProvider: ZENTRA_PREMIUM_FINAL_PROVIDER,
-    fallbackModel: ZENTRA_PREMIUM_FINAL_MODEL,
+    ...auditTierRoute("executive_refiner_pdf", true),
     premium: true,
     counterKey: "premium_pdf_used",
     allowedPlans: ["pro", "agency"],
@@ -169,6 +178,12 @@ const USER_ACCESS_SELECT_FIELDS = [
   "plan",
   "plan_type",
   "status",
+  "billing_status",
+  "subscription_ends_at",
+  "subscription_renews_at",
+  "billing_updated_at",
+  "billing_policy_pending",
+  "lemon_subscription_id",
   "audit_credits",
   "audit_credits_used",
   "actions_used",
@@ -404,8 +419,8 @@ function normalizeEmail(email = "") {
 }
 
 function normalizePlan(plan = "free") {
-  const normalizedPlan = String(plan || "free").toLowerCase();
-  return PLAN_LIMITS[normalizedPlan] ? normalizedPlan : "free";
+  const normalizedPlan = String(plan || "free").trim().toLowerCase();
+  return Object.hasOwn(PLAN_LIMITS, normalizedPlan) ? normalizedPlan : "free";
 }
 
 function normalizeCounterValue(value = 0) {
@@ -452,40 +467,10 @@ function normalizeIdentityInput(identity = {}, fallbackEmail = "") {
   };
 }
 
-function getIdentityFromRequest(req = {}, routing = {}) {
-  const body = req?.body || {};
-  const query = req?.query || {};
-  const email = normalizeEmail(
-    body.zentra_user_email ||
-    body.user_email ||
-    query.email ||
-    routing.email ||
-    routing.userEmail ||
-    ""
-  );
-  const userId = normalizeAuthUserId(
-    body.zentra_user_id ||
-    body.user_id ||
-    body.auth_user_id ||
-    query.user_id ||
-    query.auth_user_id ||
-    routing.userId ||
-    routing.authUserId ||
-    ""
-  );
-  const identitySource = body.zentra_user_id || body.user_id || body.auth_user_id
-    ? "body.user_id"
-    : (query.user_id || query.auth_user_id)
-      ? "query.user_id"
-      : (routing.userId || routing.authUserId)
-        ? "routing.user_id"
-        : (email ? "email" : "unknown");
-
-  return {
-    email,
-    userId,
-    identitySource
-  };
+function getIdentityFromRequest(req = {}) {
+  if (req.auth?.userId && req.auth?.email) return { ...req.auth };
+  // Never use email/user identifiers supplied by callers as authentication.
+  throw new Error("Verified session required");
 }
 
 async function fetchAuthUserById(userId = "") {
@@ -659,16 +644,11 @@ function normalizeTemperature(value = 0.7) {
 }
 
 function getEmailFromChatRequest(req, routing = {}) {
-  return normalizeEmail(
-    req.body?.zentra_user_email ||
-    req.body?.user_email ||
-    routing.email ||
-    routing.userEmail ||
-    ""
-  );
+  return normalizeEmail(req.auth?.email || "");
 }
 
 function getPlanTypeFromChatRequest(req, routing = {}) {
+  if (req.operation) return req.operation.product;
   const value = String(
     req.body?.zentra_plan_type ||
     routing.planType ||
@@ -680,6 +660,18 @@ function getPlanTypeFromChatRequest(req, routing = {}) {
 }
 
 async function resolveAiRoutingForRequest(req, options = {}) {
+  const resolved = await resolveExistingAiRoutingForRequest(req, options);
+  if (isAuditTask(resolved.taskType)) return { ...resolved, ...auditTierRoute(resolved.taskType,
+    options.consumePremium === false ? Boolean(resolved.premiumAllowed && resolved.premiumQuotaAvailable) : resolved.premiumActive) };
+  if (!isChatTask(resolved.taskType)) return resolved;
+  const premiumGranted = options.consumePremium === false
+    ? Boolean(resolved.premiumAllowed && resolved.premiumQuotaAvailable)
+    : Boolean(resolved.premiumActive);
+  return { ...resolved, ...chatTierRoute({ needsReasoning: resolved.taskType === "chat_premium", premiumGranted }),
+    plan: resolved.plan || normalizePlan(req.operation?.user?.plan) };
+}
+
+async function resolveExistingAiRoutingForRequest(req, options = {}) {
   const { consumePremium = true } = options;
   const routing = req.body?.zentra_routing || {};
   const incomingTaskType = routing.taskType || req.body?.task_type || "chat_basic";
@@ -742,8 +734,8 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     taskType,
     email,
     requestedModel,
-    provider: ZENTRA_BASE_PROVIDER,
-    model: ZENTRA_BASE_MODEL,
+    provider: isAuditTask(taskType) ? "openai" : ZENTRA_BASE_PROVIDER,
+    model: isAuditTask(taskType) ? "gpt-6-luna" : ZENTRA_BASE_MODEL,
     fallbackProvider: route.fallbackProvider || ZENTRA_BASE_PROVIDER,
     fallbackModel: route.fallbackModel || ZENTRA_BASE_MODEL,
     maxTokens,
@@ -792,7 +784,7 @@ async function resolveAiRoutingForRequest(req, options = {}) {
 
   const premiumModel = route.model || ZENTRA_BASE_MODEL;
   const premiumProvider = normalizeProvider(route.provider || ZENTRA_BASE_PROVIDER);
-  const isSameBaseLayer = premiumProvider === ZENTRA_BASE_PROVIDER && premiumModel === ZENTRA_BASE_MODEL;
+  const isSameBaseLayer = !isAuditTask(taskType) && premiumProvider === ZENTRA_BASE_PROVIDER && premiumModel === ZENTRA_BASE_MODEL;
 
   if (!premiumModel || isSameBaseLayer) {
     logPdfFlow("resolve:blocked_premium_model_not_configured", {
@@ -840,12 +832,12 @@ async function resolveAiRoutingForRequest(req, options = {}) {
       return resolvedAuditPremium;
     }
 
-    const auditUser = await getUserByIdentity(authContext, "audit");
+    const auditUser = req.operation?.product === "audit" ? req.operation.user : await getUserByIdentity(authContext, "audit");
     const plan = normalizePlan(auditUser?.plan);
     const credits = Number(auditUser?.audit_credits || 0);
     const used = Number(auditUser?.audit_credits_used || 0);
 
-    if (!auditUser || auditUser.status !== "active" || used >= credits) {
+    if (!auditUser || auditUser.status !== "active" || (used >= credits && !req.operation)) {
       logPdfFlow("resolve:audit_premium_not_allowed", {
         provider: resolved.provider,
         resolvedModel: resolved.model,
@@ -907,7 +899,9 @@ async function resolveAiRoutingForRequest(req, options = {}) {
   };
   const currentUsed = normalizeCounterValue(usage[route.counterKey] ?? user[route.counterKey]);
   const limit = normalizeCounterValue(limitMap[route.counterKey]);
-  const premiumQuotaAvailable = route.counterKey ? currentUsed < limit : false;
+  const receiptCounter = route.counterKey === "advanced_actions_used" ? "premium_chat_used" : route.counterKey;
+  const premiumAlreadyReserved = req.operation?.paidCounters?.has(receiptCounter) || false;
+  const premiumQuotaAvailable = route.counterKey ? currentUsed < limit || premiumAlreadyReserved : false;
   const premiumFallbackReason = premiumQuotaAvailable ? null : "advanced_quota_exceeded";
 
   if (route.counterKey === "advanced_actions_used" && !premiumQuotaAvailable) {
@@ -959,7 +953,7 @@ async function resolveAiRoutingForRequest(req, options = {}) {
       return previewPremium;
     }
 
-    if (currentUsed >= limit) {
+    if (currentUsed >= limit && !premiumAlreadyReserved) {
       logPdfFlow("resolve:premium_limit_reached_preview", {
         provider: resolved.provider,
         resolvedModel: resolved.model,
@@ -1080,9 +1074,8 @@ function getLemonMapping({ productId = "", variantId = "" } = {}) {
   const normalizedVariantId = normalizeLemonId(variantId);
   const normalizedProductId = normalizeLemonId(productId);
 
-  return LEMON_VARIANT_MAP[normalizedVariantId]
-    || LEMON_PRODUCT_MAP[normalizedProductId]
-    || null;
+  const mapping = LEMON_VARIANT_MAP[normalizedVariantId];
+  return mapping && LEMON_PRODUCT_MAP[normalizedProductId] === mapping ? mapping : null;
 }
 
 function getProductFamily(productName = "", eventName = "") {
@@ -1151,8 +1144,8 @@ function extractLemonPaymentInfo(payload = {}, eventName = "") {
     attributes.customer?.email ||
     ""
   );
-  const family = idMapping?.plan_type || getProductFamily(productLabel || productName, eventName);
-  const plan = idMapping?.plan || normalizePlanFromProductName(productLabel || productName);
+  const family = idMapping?.plan_type || "unknown";
+  const plan = idMapping?.plan || "free";
   const status = eventName === "subscription_cancelled"
     ? "cancelled"
     : normalizeLemonStatus(attributes.status, eventName);
@@ -1176,7 +1169,11 @@ function extractLemonPaymentInfo(payload = {}, eventName = "") {
     price: normalizeCounterValue(idMapping?.price),
     lemon_id: data.id || "",
     lemon_type: data.type || "",
-    lemon_status: attributes.status || ""
+    lemon_status: attributes.status || "",
+    ends_at: attributes.ends_at || null,
+    renews_at: attributes.renews_at || null,
+    updated_at: attributes.updated_at || attributes.created_at || null,
+    test_mode: attributes.test_mode === true || payload.meta?.test_mode === true
   };
 }
 
@@ -1259,11 +1256,7 @@ function normalizeLemonStatus(status = "", eventName = "") {
     return "active";
   }
 
-  if (eventName === "subscription_created" || eventName === "subscription_updated") {
-    return "active";
-  }
-
-  return value || "active";
+  return value || "unknown";
 }
 
 function verifyLemonSignature(req) {
@@ -1272,7 +1265,7 @@ function verifyLemonSignature(req) {
   }
 
   const signature = req.get("X-Signature") || req.get("x-signature") || "";
-  if (!signature || !req.rawBody) return false;
+  if (!/^[a-f0-9]{64}$/i.test(signature) || !req.rawBody) return false;
 
   const digest = crypto
     .createHmac("sha256", LEMON_WEBHOOK_SECRET)
@@ -1289,72 +1282,6 @@ function verifyLemonSignature(req) {
   return crypto.timingSafeEqual(signatureBuffer, digestBuffer);
 }
 
-async function upsertUserAccess(userData = {}) {
-  const client = getSupabaseClient();
-  const normalizedIdentity = normalizeIdentityInput({
-    email: userData.email || userData.customer_email || "",
-    userId: userData.auth_user_id || userData.user_id || ""
-  });
-  const payload = {
-    email: normalizedIdentity.email,
-    auth_user_id: normalizedIdentity.userId || null,
-    plan: normalizePlan(userData.plan),
-    plan_type: userData.plan_type,
-    status: userData.status,
-    audit_credits: normalizeCounterValue(userData.audit_credits),
-    audit_credits_used: normalizeCounterValue(userData.audit_credits_used),
-    actions_used: normalizeCounterValue(userData.actions_used),
-    audits_used: normalizeCounterValue(userData.audits_used),
-    premium_chat_used: normalizeCounterValue(userData.premium_chat_used),
-    premium_pdf_used: normalizeCounterValue(userData.premium_pdf_used),
-    extra_actions_balance: normalizeCounterValue(userData.extra_actions_balance),
-    extra_audits_balance: normalizeCounterValue(userData.extra_audits_balance),
-    extra_actions_used_cycle: normalizeCounterValue(userData.extra_actions_used_cycle),
-    extra_audits_used_cycle: normalizeCounterValue(userData.extra_audits_used_cycle),
-    extra_actions_purchased_total: normalizeCounterValue(userData.extra_actions_purchased_total),
-    extra_audits_purchased_total: normalizeCounterValue(userData.extra_audits_purchased_total),
-    purchase_history: normalizePurchaseHistory(userData.purchase_history),
-    billing_cycle_start: normalizeCounterValue(userData.billing_cycle_start || Date.now()),
-    updated_at: new Date().toISOString()
-  };
-  const storagePayload = { ...payload };
-  if (!USER_ACCESS_HAS_AUTH_USER_ID) {
-    delete storagePayload.auth_user_id;
-  }
-
-  const normalizedPlanType = payload.plan_type === "audit" ? "audit" : "subscription";
-  const existingUser = await getUserByIdentity({
-    email: payload.email,
-    userId: payload.auth_user_id
-  }, normalizedPlanType);
-
-  if (existingUser?.id) {
-    const { data, error } = await client
-      .from("users")
-      .update(storagePayload)
-      .eq("id", existingUser.id)
-      .select(USER_ACCESS_SELECT_FIELDS)
-      .single();
-
-    if (error) {
-      throw error;
-    }
-
-    return data;
-  }
-
-  const { data, error } = await client
-    .from("users")
-    .insert(storagePayload)
-    .select(USER_ACCESS_SELECT_FIELDS)
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
-}
 
 async function getUserByIdentity(identityOrEmail = {}, planType = "subscription") {
   const client = getSupabaseClient();
@@ -1543,66 +1470,18 @@ async function recordPaymentLog(logType = "", paymentInfo = {}, metadata = {}) {
 }
 
 async function addCreditsByEmail(email, actions = 0, audits = 0, options = {}) {
-  const normalizedEmail = normalizeEmail(email);
-  if (!normalizedEmail) {
-    throw new Error("Email requerido para sumar creditos");
-  }
-
-  const existingUser = await getUserByEmail(normalizedEmail, "subscription");
-  const user = existingUser || getDefaultSubscriptionUser(normalizedEmail);
-  const purchaseHistory = normalizePurchaseHistory(user.purchase_history);
-  const lemonOrderId = String(options.lemonOrderId || "").trim();
-
-  if (lemonOrderId && purchaseHistory.some((entry) => String(entry?.lemonOrderId || "").trim() === lemonOrderId)) {
-    const savedUser = await upsertUserAccess({
-      ...user,
-      purchase_history: purchaseHistory
-    });
-
-    return {
-      user: savedUser,
-      duplicate: true
-    };
-  }
-
-  const extraActions = normalizeCounterValue(actions);
-  const extraAudits = normalizeCounterValue(audits);
-  const nextHistory = [
-    {
-      type: options.type || "credits",
-      packId: options.packId || "",
-      productFamily: options.productFamily || "extra",
-      productKey: options.productKey || "",
-      extraActions,
-      extraAudits,
-      purchasedAt: new Date().toISOString(),
-      lemonOrderId,
-      lemonProductId: options.productId || "",
-      lemonVariantId: options.variantId || ""
-    },
-    ...purchaseHistory
-  ].slice(0, 100);
-
-  const savedUser = await upsertUserAccess({
-    ...user,
-    email: normalizedEmail,
-    plan: user.plan || "free",
-    plan_type: "subscription",
-    status: user.status || "active",
-    extra_actions_balance: normalizeCounterValue(user.extra_actions_balance) + extraActions,
-    extra_audits_balance: normalizeCounterValue(user.extra_audits_balance) + extraAudits,
-    extra_actions_purchased_total: normalizeCounterValue(user.extra_actions_purchased_total) + extraActions,
-    extra_audits_purchased_total: normalizeCounterValue(user.extra_audits_purchased_total) + extraAudits,
-    purchase_history: nextHistory
+  const { data, error } = await getSupabaseClient().rpc("zentra_apply_payment", {
+    p_email: normalizeEmail(email), p_product: "extra", p_plan: "agency",
+    p_id: String(options.lemonOrderId || ""), p_status: "paid", p_ends: null, p_renews: null,
+    p_changed: null, p_actions: normalizeCounterValue(actions), p_audits: normalizeCounterValue(audits),
+    p_history: { ...options, extraActions: actions, extraAudits: audits, purchasedAt: new Date().toISOString() }
   });
-
-  return {
-    user: savedUser,
-    duplicate: false
-  };
+  if (error) throw error;
+  return data;
 }
 
 function formatSubscriptionUsage(user = {}) {
+  if (user.status === "cancelled") user = { ...user, plan: "free" };
   const identitySource = String(user.identity_source || (user.auth_user_id ? "auth_user_id" : "email") || "").trim() || (user.auth_user_id ? "auth_user_id" : "email");
   const normalizedAuthUserId = normalizeAuthUserId(user.auth_user_id);
 
@@ -1690,6 +1569,10 @@ function formatSubscriptionUsage(user = {}) {
     plan,
     plan_type: "subscription",
     status: user.status || "active",
+    billing_status: user.billing_status || null,
+    subscription_ends_at: user.subscription_ends_at || null,
+    subscription_renews_at: user.subscription_renews_at || null,
+    billing_policy_pending: Boolean(user.billing_policy_pending),
     actions_used: actionsUsed,
     actions_limit: actionsLimit,
     actions_remaining: Math.max(actionsLimit - actionsUsed, 0),
@@ -1727,288 +1610,59 @@ function formatSubscriptionUsage(user = {}) {
   };
 }
 
+function buildPublicUsagePayload(usage = {}) {
+  return {
+    plan: normalizePlan(usage.plan || "free"),
+    actionsUsed: normalizeCounterValue(usage.actions_used),
+    actionsLimit: normalizeCounterValue(usage.actions_limit),
+    actionsRemaining: normalizeCounterValue(usage.actions_remaining),
+    auditsUsed: normalizeCounterValue(usage.audits_used),
+    auditsLimit: normalizeCounterValue(usage.audits_limit),
+    auditsRemaining: normalizeCounterValue(usage.audits_remaining)
+  };
+}
+
 async function ensureFreshSubscriptionUsage(identityOrEmail) {
   const identity = normalizeIdentityInput(identityOrEmail);
-
-  if (hasUnlimitedAgencyOverride(identity.email)) {
-    const existingUser = await getUserByIdentity(identity, "subscription");
-    const linkedUser = existingUser && identity.userId && normalizeAuthUserId(existingUser.auth_user_id) !== identity.userId
-      ? await upsertUserAccess({
-          ...existingUser,
-          email: existingUser.email || identity.email,
-          auth_user_id: identity.userId,
-          plan_type: "subscription",
-          status: existingUser.status || "active"
-        })
-      : existingUser;
-    return applyUnlimitedAgencySubscriptionUser(identity.email, linkedUser || getDefaultSubscriptionUser(identity));
-  }
-
-  let existingUser = await getUserByIdentity(identity, "subscription");
-  let user = existingUser || getDefaultSubscriptionUser(identity);
-
-  if (existingUser && identity.userId && normalizeAuthUserId(existingUser.auth_user_id) !== identity.userId) {
-    user = await upsertUserAccess({
-      ...existingUser,
-      email: existingUser.email || identity.email,
-      auth_user_id: identity.userId,
-      plan_type: "subscription",
-      status: existingUser.status || "active"
-    });
-    existingUser = user;
-  }
-
-  if (user.status === "cancelled") {
-    return {
-      ...getDefaultSubscriptionUser(identity),
-      status: "cancelled"
-    };
-  }
-
-  if (!existingUser || shouldResetMonthlyUsage(user)) {
-    return upsertUserAccess({
-      ...user,
-      plan: user.plan || "free",
-      plan_type: "subscription",
-      status: user.status || "active",
-      auth_user_id: identity.userId || normalizeAuthUserId(user.auth_user_id) || null,
-      actions_used: 0,
-      audits_used: 0,
-      premium_chat_used: 0,
-      premium_pdf_used: 0,
-      extra_actions_used_cycle: 0,
-      extra_audits_used_cycle: 0,
-      billing_cycle_start: Date.now()
-    });
-  }
-
-  return user;
+  const { data, error } = await getSupabaseClient().rpc("zentra_access", {
+    p_auth_id: identity.userId, p_email: identity.email, p_product: "subscription"
+  });
+  if (error) throw error;
+  return hasUnlimitedAgencyOverride(identity.email)
+    ? applyUnlimitedAgencySubscriptionUser(identity.email, data) : data;
 }
 
 async function consumeSubscriptionUsage(identityOrEmail, counterKey = "actions_used") {
   const identity = normalizeIdentityInput(identityOrEmail);
-
-  if (hasUnlimitedAgencyOverride(identity.email)) {
-    const user = await ensureFreshSubscriptionUsage(identity);
-    return {
-      allowed: true,
-      reason: "unlimited_agency_override",
-      user
-    };
-  }
-
-  const normalizedCounterKey = normalizeAdvancedChatCounterKey(counterKey);
-  const allowedCounters = new Set(["actions_used", "audits_used", "premium_chat_used", "premium_pdf_used", "advanced_actions_used"]);
-  if (!allowedCounters.has(normalizedCounterKey)) {
-    return {
-      allowed: false,
-      reason: "invalid_counter"
-    };
-  }
-
-  const user = await ensureFreshSubscriptionUsage(identity);
-  if (!user || user.status !== "active") {
-    return {
-      allowed: false,
-      reason: "no_active_subscription",
-      user
-    };
-  }
-
-  const usage = formatSubscriptionUsage(user);
-  const baseActionsLimit = normalizeCounterValue(usage.base_actions_limit);
-  const baseAuditsLimit = normalizeCounterValue(usage.base_audits_limit);
-  const currentBaseActionsUsed = normalizeCounterValue(user.actions_used);
-  const currentBaseAuditsUsed = normalizeCounterValue(user.audits_used);
-  const currentExtraActionsBalance = normalizeCounterValue(user.extra_actions_balance);
-  const currentExtraAuditsBalance = normalizeCounterValue(user.extra_audits_balance);
-  const currentExtraActionsUsedCycle = normalizeCounterValue(user.extra_actions_used_cycle);
-  const currentExtraAuditsUsedCycle = normalizeCounterValue(user.extra_audits_used_cycle);
-  const storageCounterKey = normalizedCounterKey === "advanced_actions_used" ? "premium_chat_used" : normalizedCounterKey;
-  const currentUsed = normalizeCounterValue(user[storageCounterKey]);
-  const limitMap = {
-    premium_chat_used: usage.premium_chat_limit,
-    advanced_actions_used: usage.advanced_actions_limit ?? usage.premium_chat_limit,
-    premium_pdf_used: usage.premium_pdf_limit
-  };
-
-  const nextUser = {
-    ...user,
-    plan_type: "subscription",
-    status: "active"
-  };
-
-  if (counterKey === "actions_used") {
-    if (currentBaseActionsUsed < baseActionsLimit) {
-      nextUser.actions_used = currentBaseActionsUsed + 1;
-    } else if (currentExtraActionsBalance > 0) {
-      nextUser.extra_actions_balance = currentExtraActionsBalance - 1;
-      nextUser.extra_actions_used_cycle = currentExtraActionsUsedCycle + 1;
-    } else {
-      return {
-        allowed: false,
-        reason: "usage_limit_reached",
-        user
-      };
-    }
-  } else if (counterKey === "audits_used") {
-    if (currentBaseAuditsUsed < baseAuditsLimit) {
-      nextUser.audits_used = currentBaseAuditsUsed + 1;
-    } else if (currentExtraAuditsBalance > 0) {
-      nextUser.extra_audits_balance = currentExtraAuditsBalance - 1;
-      nextUser.extra_audits_used_cycle = currentExtraAuditsUsedCycle + 1;
-    } else {
-      return {
-        allowed: false,
-        reason: "usage_limit_reached",
-        user
-      };
-    }
-  } else {
-    const limit = normalizeCounterValue(limitMap[normalizedCounterKey]);
-    if (currentUsed >= limit) {
-      if (normalizedCounterKey === "advanced_actions_used") {
-        console.log("[USAGE ADVANCED ACTION]", {
-          email: identity.email || null,
-          userId: identity.userId || null,
-          plan: user?.plan || "free",
-          used: currentUsed,
-          limit,
-          reason: "usage_limit_reached"
-        });
-      }
-      return {
-        allowed: false,
-        reason: "usage_limit_reached",
-        user
-      };
-    }
-    nextUser[storageCounterKey] = currentUsed + 1;
-  }
-
-  const savedUser = await upsertUserAccess(nextUser);
-
-  if (normalizedCounterKey === "advanced_actions_used") {
-    console.log("[USAGE ADVANCED ACTION]", {
-      email: identity.email || null,
-      userId: identity.userId || null,
-      plan: savedUser?.plan || user?.plan || "free",
-      used: normalizeCounterValue(savedUser?.premium_chat_used),
-      limit: normalizeCounterValue(limitMap.advanced_actions_used)
-    });
-  }
-
-  return {
-    allowed: true,
-    user: savedUser
-  };
+  const operation = operationContext.getStore();
+  const normalizedCounter = normalizeAdvancedChatCounterKey(counterKey);
+  const counter = normalizedCounter === "advanced_actions_used" ? "premium_chat_used" : normalizedCounter;
+  if (!operation) return { allowed: false, reason: "generation_required" };
+  const { data, error } = await getSupabaseClient().rpc("zentra_consume_generation", {
+    p_auth_id: identity.userId, p_email: identity.email, p_product: "subscription",
+    p_counter: counter, p_key: operation.id,
+    p_hash: operation.requestHash, p_lease: operation.leaseToken,
+    p_unlimited: hasUnlimitedAgencyOverride(identity.email)
+  });
+  if (error) throw error;
+  if (data?.allowed) operation.paidCounters?.add(counter);
+  return data;
 }
 
 async function grantAuditAccess(paymentInfo = {}) {
-  const identity = normalizeIdentityInput(paymentInfo);
-  const email = identity.email;
-  const existingUser = await getUserByIdentity(identity, "audit");
-  const user = existingUser || {
-    ...getDefaultSubscriptionUser(identity),
-    plan: paymentInfo.plan,
-    plan_type: "audit"
-  };
-  const purchaseHistory = normalizePurchaseHistory(user.purchase_history);
-  const lemonOrderId = String(paymentInfo.lemon_id || "").trim();
-
-  if (lemonOrderId && purchaseHistory.some((entry) => String(entry?.lemonOrderId || "").trim() === lemonOrderId)) {
-    const savedUser = await upsertUserAccess({
-      ...user,
-      purchase_history: purchaseHistory
-    });
-
-    return {
-      user: savedUser,
-      duplicate: true
-    };
-  }
-
-  const nextHistory = [
-    {
-      type: "audit_credit",
-      productFamily: paymentInfo.product_family || "audit",
-      productKey: paymentInfo.product_key || "",
-      pages: normalizeCounterValue(paymentInfo.pages),
-      purchasedAt: new Date().toISOString(),
-      lemonOrderId,
-      lemonProductId: paymentInfo.product_id || "",
-      lemonVariantId: paymentInfo.variant_id || ""
-    },
-    ...purchaseHistory
-  ].slice(0, 100);
-
-  const savedUser = await upsertUserAccess({
-    ...user,
-    email,
-    auth_user_id: identity.userId || normalizeAuthUserId(user.auth_user_id) || null,
-    plan: paymentInfo.plan,
-    plan_type: "audit",
-    status: "active",
-    audit_credits: normalizeCounterValue(user.audit_credits) + 1,
-    audit_credits_used: normalizeCounterValue(user.audit_credits_used),
-    purchase_history: nextHistory
+  const { data, error } = await getSupabaseClient().rpc("zentra_apply_payment", {
+    p_email: normalizeEmail(paymentInfo.email), p_product: "audit", p_plan: paymentInfo.plan,
+    p_id: String(paymentInfo.lemon_id || ""), p_status: paymentInfo.lemon_status,
+    p_ends: null, p_renews: null, p_changed: null, p_actions: 0, p_audits: 0,
+    p_history: { type: "audit_credit", lemonOrderId: String(paymentInfo.lemon_id || ""),
+      pages: normalizeCounterValue(paymentInfo.pages), purchasedAt: new Date().toISOString() }
   });
-
-  await recordPaymentLog("auditActivated", paymentInfo, {
-    auditInstructions: getAuditInstructionMessage(),
-    pages: normalizeCounterValue(paymentInfo.pages)
-  });
-
-  return {
-    user: savedUser,
-    duplicate: false
-  };
+  if (error) throw error;
+  return data;
 }
 
-async function consumeAuditCredit(email) {
-  const identity = normalizeIdentityInput(email);
-
-  if (hasUnlimitedAgencyOverride(identity.email)) {
-    const user = await getUserByIdentity(identity, "audit");
-    return {
-      allowed: true,
-      reason: "unlimited_agency_override",
-      user: getUnlimitedAuditUsage(identity.email, user || {})
-    };
-  }
-
-  const user = await getUserByIdentity(identity, "audit");
-
-  if (!user || user.status !== "active") {
-    return {
-      allowed: false,
-      reason: "no_active_audit_access",
-      user
-    };
-  }
-
-  const credits = Number(user.audit_credits || 0);
-  const used = Number(user.audit_credits_used || 0);
-
-  if (used >= credits) {
-    return {
-      allowed: false,
-      reason: "audit_credit_limit_reached",
-      user
-    };
-  }
-
-  const savedUser = await upsertUserAccess({
-    ...user,
-    auth_user_id: identity.userId || normalizeAuthUserId(user.auth_user_id) || null,
-    audit_credits_used: used + 1,
-    status: "active"
-  });
-
-  return {
-    allowed: true,
-    user: savedUser
-  };
+async function consumeAuditCredit() {
+  return { allowed: false, reason: "generation_required" };
 }
 
 function parseJsonSafely(content) {
@@ -2081,11 +1735,11 @@ function buildOpenAIRequestBody({ model, messages, responseFormat, temperature, 
 }
 
 function shouldUseOpenAIResponsesApi(model = "") {
-  return /^gpt-5/i.test(String(model || "").trim());
+  return /^gpt-5/i.test(String(model || "").trim()) || /^gpt-(?:6-luna|6\.1-sol)(?:-|$)/i.test(String(model || "").trim());
 }
 
 function shouldOmitTemperatureForModel(model = "") {
-  return /^gpt-5($|-)/i.test(String(model || "").trim());
+  return /^gpt-5($|-)/i.test(String(model || "").trim()) || /^gpt-(?:6-luna|6\.1-sol)(?:-|$)/i.test(String(model || "").trim());
 }
 
 function isPlainObject(value) {
@@ -2424,9 +2078,19 @@ function buildOpenAIResponsesRequestBody({ model, messages, responseFormat, temp
     input: sanitized.input,
     max_output_tokens: maxTokens
   };
+  if (requestContext.taskType === "seo_analysis" && /^gpt-5(?:[.-]|$)/i.test(model)) {
+    body.reasoning = { effort: "low" };
+  }
+  if (requestContext.chatRouting) {
+    body.reasoning = { effort: requestContext.chatRouting.reasoningEffort };
+  }
+  if (requestContext.auditRouting) body.reasoning = { effort: requestContext.auditRouting.reasoning_effort };
 
   if (responseFormat?.type === "json_object") {
     body.text = { format: { type: "json_object" } };
+  }
+  if (requestContext.chatRouting && responseFormat?.type === "json_schema") {
+    body.text = { format: { type: "json_schema", ...responseFormat.json_schema } };
   }
 
   if (!shouldOmitTemperatureForModel(model)) {
@@ -2488,7 +2152,10 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
         coerced: responseBody.sanitizerStats.coerced,
         dropped: responseBody.sanitizerStats.dropped
       } : null,
-      summary: summarizeOpenAIResponsesInputForLog(body.input)
+      summary: requestContext.taskType === "seo_analysis"
+        ? body.input.map(item => ({ role: item.role, contentTypes: item.content.map(part => part.type) }))
+        : requestContext.chatRouting || requestContext.auditRouting ? body.input.map(item => ({ role: item.role, contentTypes: item.content.map(part => part.type) }))
+          : summarizeOpenAIResponsesInputForLog(body.input)
     });
 
     if (responseBody.sanitizerStats?.fixedAssistantInputText) {
@@ -2501,15 +2168,27 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
     }
   }
 
+  const startedAt = Date.now();
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${OPENAI_API_KEY}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    ...(requestContext.auditRecovery ? { signal: AbortSignal.timeout(45000) } : {})
   });
-  const data = await response.json().catch(() => ({}));
+  const data = await response.json().catch(error => {
+    if (response.ok) throw error;
+    return {};
+  });
+  if (requestContext.chatRouting) {
+    const telemetry = chatCostTelemetry({ model, context: requestContext, usage: data.usage,
+      operationId: operationContext.getStore()?.id, status: response.status });
+    console.log("[CHAT COST]", telemetry);
+  }
+  if (requestContext.auditRouting) console.log("[AUDIT COST]", auditCostTelemetry({ model,
+    context: requestContext, usage: data.usage, status: response.status, latencyMs: Date.now() - startedAt }));
 
   return {
     ok: response.ok,
@@ -2521,7 +2200,7 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
   };
 }
 
-async function callAnthropic({ model, messages, temperature, maxTokens }) {
+async function callAnthropic({ model, messages, temperature, maxTokens, requestContext = {} }) {
   if (!ANTHROPIC_API_KEY) {
     return {
       ok: false,
@@ -2544,9 +2223,13 @@ async function callAnthropic({ model, messages, temperature, maxTokens }) {
       messages,
       temperature,
       maxTokens
-    }))
+    })),
+    ...(requestContext.auditRecovery ? { signal: AbortSignal.timeout(45000) } : {})
   });
-  const data = await response.json().catch(() => ({}));
+  const data = await response.json().catch(error => {
+    if (response.ok) throw error;
+    return {};
+  });
 
   return {
     ok: response.ok,
@@ -2622,16 +2305,28 @@ function getAiErrorMessage(result = {}) {
 }
 
 async function callAiProvider({ provider, model, messages, responseFormat, temperature, maxTokens, requestContext = {} }) {
+  const operation = operationContext.getStore();
+  if (operation?.externalUncertain) throw new Error("External result not confirmed");
+  await operation?.startProvider?.();
   const normalizedProvider = normalizeProvider(provider);
-
-  if (normalizedProvider === "anthropic") {
-    return callAnthropic({ model, messages, temperature, maxTokens });
+  try {
+    if (normalizedProvider === "anthropic") {
+      return await callAnthropic({ model, messages, temperature, maxTokens, requestContext });
+    }
+    return await callOpenAI({ model, messages, responseFormat, temperature, maxTokens, requestContext: {
+      provider: normalizedProvider,
+      ...requestContext
+    } });
+  } catch (error) {
+    if (operation) operation.externalUncertain = true;
+    if (requestContext.chatRouting) {
+      console.log("[CHAT COST]", chatCostTelemetry({ model, context: requestContext,
+        operationId: operation?.id, status: "execution_uncertain" }));
+    }
+    if (requestContext.auditRouting) console.log("[AUDIT COST]", auditCostTelemetry({ model,
+      context: requestContext, status: "execution_uncertain" }));
+    throw error;
   }
-
-  return callOpenAI({ model, messages, responseFormat, temperature, maxTokens, requestContext: {
-    provider: normalizedProvider,
-    ...requestContext
-  } });
 }
 
 function normalizeAudioMimeType(mimeType = "") {
@@ -2661,6 +2356,8 @@ function extensionFromMimeType(mimeType = "") {
 }
 
 async function transcribeDesktopAudio({ audioBase64, mimeType = "audio/webm", language = "es" }) {
+  const input = validateAudioInput({ audioBase64, mimeType, language });
+  if (!input.ok) return input;
   if (!OPENAI_API_KEY) {
     return {
       ok: false,
@@ -2669,35 +2366,8 @@ async function transcribeDesktopAudio({ audioBase64, mimeType = "audio/webm", la
     };
   }
 
-  const cleanedBase64 = String(audioBase64 || "").replace(/^data:.*;base64,/, "").trim();
-  if (!cleanedBase64) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Audio vacio"
-    };
-  }
-
-  const normalizedMimeType = normalizeAudioMimeType(mimeType);
-  const audioBuffer = Buffer.from(cleanedBase64, "base64");
-  const audioSizeBytes = audioBuffer.byteLength;
-
-  if (!audioSizeBytes) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Audio vacio"
-    };
-  }
-
-  const maxBytes = 25 * 1024 * 1024;
-  if (audioSizeBytes > maxBytes) {
-    return {
-      ok: false,
-      status: 413,
-      error: "El audio supera el limite de 25MB"
-    };
-  }
+  const normalizedMimeType = input.mimeType;
+  const audioBuffer = input.buffer;
 
   const audioFile = new File(
     [audioBuffer],
@@ -2708,9 +2378,9 @@ async function transcribeDesktopAudio({ audioBase64, mimeType = "audio/webm", la
   const form = new FormData();
   form.append("file", audioFile);
   form.append("model", DESKTOP_TRANSCRIPTION_MODEL);
-  form.append("language", String(language || "es").trim() || "es");
+  form.append("language", input.language);
 
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+  const { response, payloadText } = await fetchAudioResponse(fetch, "https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`
@@ -2719,7 +2389,6 @@ async function transcribeDesktopAudio({ audioBase64, mimeType = "audio/webm", la
   });
 
   const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-  const payloadText = await response.text();
 
   if (!response.ok) {
     let payload = null;
@@ -2734,17 +2403,8 @@ async function transcribeDesktopAudio({ audioBase64, mimeType = "audio/webm", la
     };
   }
 
-  let transcriptText = payloadText;
-  if (contentType.includes("application/json")) {
-    try {
-      const payload = payloadText ? JSON.parse(payloadText) : {};
-      transcriptText = String(payload?.text || "").trim();
-    } catch (_) {
-      transcriptText = String(payloadText || "").trim();
-    }
-  } else {
-    transcriptText = String(payloadText || "").trim();
-  }
+  const transcriptText = parseAudioTranscript(payloadText, contentType);
+  if (!transcriptText) return { ok: false, status: 502, error: "No se obtuvo una transcripcion valida" };
 
   return {
     ok: true,
@@ -3099,8 +2759,7 @@ function sumAiUsage(usages = []) {
 
 function shouldAttemptExecutiveChatPolish(fastLayer = {}, reasoningLayer = {}) {
   if (!ZENTRA_CHAT_EXECUTIVE_ENABLED) return false;
-  if (!isProviderConfigured(ZENTRA_CHAT_EXECUTIVE_PROVIDER)) return false;
-  if (!ZENTRA_CHAT_EXECUTIVE_MODEL) return false;
+  if (!isProviderConfigured(ZENTRA_CHAT_FAST_PROVIDER)) return false;
 
   const candidateText = firstNonEmptyString(reasoningLayer.response);
   if (!candidateText || candidateText.length < 90) return false;
@@ -3114,11 +2773,8 @@ function shouldAttemptExecutiveChatPolish(fastLayer = {}, reasoningLayer = {}) {
 
 function buildChatExecutiveRoute(reasoningRoute = {}) {
   return {
+    ...reasoningRoute,
     taskType: "chat_executive",
-    provider: ZENTRA_CHAT_EXECUTIVE_PROVIDER,
-    model: ZENTRA_CHAT_EXECUTIVE_MODEL,
-    fallbackProvider: reasoningRoute.provider || ZENTRA_CHAT_REASONING_PROVIDER,
-    fallbackModel: reasoningRoute.model || ZENTRA_CHAT_REASONING_MODEL,
     maxTokens: ZENTRA_CHAT_EXECUTIVE_MAX_TOKENS
   };
 }
@@ -3148,7 +2804,8 @@ async function callLayeredChatStep({
       routeName: route.taskType || "layered_chat",
       taskType: route.taskType || null,
       requestedModel: route.model || null,
-      ...requestContext
+      ...requestContext,
+      ...chatRequestContext(route)
     }
   });
 
@@ -3174,7 +2831,7 @@ async function callLayeredChatStep({
           routeName: route.taskType || "layered_chat_fallback",
           taskType: route.taskType || null,
           requestedModel: route.fallbackModel || route.model || null,
-          ...requestContext
+          ...chatTechnicalFallbackContext({ ...requestContext, ...chatRequestContext(route) })
         }
       });
     requestedProvider = route.fallbackProvider;
@@ -3200,33 +2857,16 @@ async function callLayeredChatStep({
 }
 
 function writeNdjsonEvent(res, payload = {}) {
-  res.write(`${JSON.stringify(payload)}\n`);
+  const visible = publicStreamEvent(payload);
+  if (visible) res.write(`${JSON.stringify(visible)}\n`);
 }
 
-app.get("/api/health", (_req, res) => {
-  res.json({
-    ok: true,
-    service: "zentra-backend",
-    supabase_configured: Boolean(supabase),
-    lemon_webhook_configured: Boolean(LEMON_WEBHOOK_SECRET),
-    ai: {
-      openai_configured: Boolean(OPENAI_API_KEY),
-      anthropic_configured: Boolean(ANTHROPIC_API_KEY),
-      base_provider: ZENTRA_BASE_PROVIDER,
-      base_model: ZENTRA_BASE_MODEL,
-      premium_provider: ZENTRA_PREMIUM_PROVIDER,
-      premium_model: ZENTRA_PREMIUM_MODEL,
-      premium_final_provider: ZENTRA_PREMIUM_FINAL_PROVIDER,
-      premium_final_model: ZENTRA_PREMIUM_FINAL_MODEL,
-      executive_refiner_enabled: ZENTRA_EXECUTIVE_REFINER_ENABLED,
-      executive_refiner_provider: ZENTRA_EXECUTIVE_REFINER_PROVIDER,
-      executive_refiner_model: ZENTRA_EXECUTIVE_REFINER_MODEL,
-      executive_refiner_max_tokens: ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS
-    }
-  });
-});
+app.get(["/api/health", "/health"], minimalHealth);
 
 app.post("/api/audio/transcribe", async (req, res) => {
+  if (!ZENTRA_AUDIO_TRANSCRIPTION_ENABLED) {
+    return res.status(503).json({ error: "Esta funcion no esta disponible." });
+  }
   try {
     const {
       audioBase64 = "",
@@ -3242,193 +2882,24 @@ app.post("/api/audio/transcribe", async (req, res) => {
 
     if (!result.ok) {
       return res.status(result.status || 500).json({
-        error: result.error || "No se pudo transcribir el audio"
+        error: "No se pudo transcribir el audio"
       });
     }
 
     return res.json({
       success: true,
-      text: result.text || "",
-      model: result.model || DESKTOP_TRANSCRIPTION_MODEL
+      text: result.text || ""
     });
   } catch (error) {
-    return res.status(500).json({
-      error: error?.message || "No se pudo transcribir el audio"
+    return res.status(error?.name === "AbortError" ? 504 : 500).json({
+      error: "No se pudo transcribir el audio"
     });
   }
 });
 
-app.post("/api/lemon/webhook", async (req, res) => {
-  try {
-    if (!verifyLemonSignature(req)) {
-      console.warn("[lemon:webhook] Firma invalida");
-      return res.status(401).json({ error: "Invalid webhook signature" });
-    }
-
-    const payload = req.body || {};
-    const eventName = getEventName(req, payload);
-
-    if (!SUPPORTED_LEMON_EVENTS.has(eventName)) {
-      console.log(`[lemon:webhook] Evento ignorado: ${eventName || "sin_evento"}`);
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        event: eventName
-      });
-    }
-
-    const paymentInfo = {
-      ...extractLemonPaymentInfo(payload, eventName),
-      eventName
-    };
-    const capacityPack = getAgencyCapacityPackByLemonIds({
-      productId: paymentInfo.product_id,
-      variantId: paymentInfo.variant_id
-    });
-
-    if (!paymentInfo.email) {
-      console.warn(`[lemon:webhook] Evento ${eventName} sin email`, {
-        lemon_id: paymentInfo.lemon_id,
-        product: paymentInfo.product_label
-      });
-      return res.status(400).json({ error: "Webhook sin email de usuario" });
-    }
-
-    await recordPaymentLog("paymentReceived", paymentInfo, { eventName });
-
-    if (eventName === "order_created" && (capacityPack || paymentInfo.plan_type === "extra")) {
-      if (!capacityPack) {
-        await recordPaymentLog("extraRejected", paymentInfo, {
-          reason: "capacity_pack_not_found"
-        });
-
-        return res.status(200).json({
-          success: true,
-          ignored: true,
-          event: eventName,
-          reason: "capacity_pack_not_found"
-        });
-      }
-
-      const result = await grantSubscriptionCapacityUpgrade(paymentInfo, capacityPack);
-      const savedUser = result.user;
-      console.log("[lemon:webhook] Expansion de capacidad sincronizada", {
-        email: savedUser.email,
-        packId: capacityPack.packId,
-        extraActions: capacityPack.extraActions,
-        extraAudits: capacityPack.extraAudits,
-        skipped: Boolean(result.skipped),
-        duplicate: Boolean(result.duplicate)
-      });
-
-      return res.status(200).json({
-        success: true,
-        event: eventName,
-        packId: capacityPack.packId,
-        skipped: Boolean(result.skipped),
-        reason: result.reason || null,
-        user: savedUser
-      });
-    }
-
-    if (paymentInfo.plan === "free") {
-      console.warn(`[lemon:webhook] Producto sin plan reconocible: ${paymentInfo.product_label}`);
-      return res.status(400).json({ error: "Producto sin plan reconocible" });
-    }
-
-    if (eventName === "order_created" && paymentInfo.plan_type === "audit") {
-      const result = await grantAuditAccess(paymentInfo);
-      const savedUser = result.user;
-
-      if (!result.duplicate) {
-        await recordPaymentLog("creditsAdded", paymentInfo, {
-          auditCreditsAdded: 1,
-          auditInstructions: getAuditInstructionMessage()
-        });
-      }
-
-      console.log("[lemon:webhook] Compra Audit sincronizada", {
-        email: savedUser.email,
-        plan: savedUser.plan,
-        credits: savedUser.audit_credits,
-        used: savedUser.audit_credits_used,
-        product: paymentInfo.product_label,
-        duplicate: Boolean(result.duplicate)
-      });
-
-      return res.status(200).json({
-        success: true,
-        event: eventName,
-        duplicate: Boolean(result.duplicate),
-        auditInstructions: getAuditInstructionMessage(),
-        user: savedUser
-      });
-    }
-
-    if (!eventName.startsWith("subscription_")) {
-      console.log(`[lemon:webhook] Evento ${eventName} no aplica a SaaS. Ignorado.`);
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        event: eventName
-      });
-    }
-
-    const existingUser = await getUserByEmail(paymentInfo.email, "subscription");
-    const savedUser = await upsertUserAccess({
-      email: paymentInfo.email,
-      plan: paymentInfo.plan,
-      plan_type: "subscription",
-      status: paymentInfo.status,
-      audit_credits: Number(existingUser?.audit_credits || 0),
-      audit_credits_used: Number(existingUser?.audit_credits_used || 0),
-      actions_used: Number(existingUser?.actions_used || 0),
-      audits_used: Number(existingUser?.audits_used || 0),
-      premium_chat_used: Number(existingUser?.premium_chat_used || 0),
-      premium_pdf_used: Number(existingUser?.premium_pdf_used || 0),
-      extra_actions_balance: Number(existingUser?.extra_actions_balance || 0),
-      extra_audits_balance: Number(existingUser?.extra_audits_balance || 0),
-      extra_actions_used_cycle: Number(existingUser?.extra_actions_used_cycle || 0),
-      extra_audits_used_cycle: Number(existingUser?.extra_audits_used_cycle || 0),
-      extra_actions_purchased_total: Number(existingUser?.extra_actions_purchased_total || 0),
-      extra_audits_purchased_total: Number(existingUser?.extra_audits_purchased_total || 0),
-      purchase_history: normalizePurchaseHistory(existingUser?.purchase_history),
-      billing_cycle_start: Number(existingUser?.billing_cycle_start || Date.now())
-    });
-
-    console.log("[lemon:webhook] Suscripcion SaaS sincronizada", {
-      event: eventName,
-      email: savedUser.email,
-      plan: savedUser.plan,
-      status: savedUser.status,
-      product: paymentInfo.product_label
-    });
-
-    await recordPaymentLog("planActivated", paymentInfo, {
-      eventName,
-      status: savedUser.status
-    });
-
-    if (savedUser.status === "active" && eventName !== "subscription_cancelled") {
-      const planLimits = getPlanLimits(savedUser.plan);
-      await recordPaymentLog("creditsAdded", paymentInfo, {
-        baseActions: planLimits.actions,
-        baseAudits: planLimits.audits
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      event: eventName,
-      user: savedUser
-    });
-  } catch (error) {
-    console.error("[lemon:webhook] Error procesando webhook:", error);
-    return res.status(500).json({
-      error: "Error procesando webhook"
-    });
-  }
-});
+const lemonHandlers = createLemonHandlers({ client: supabase, products: LEMON_PRODUCTS });
+app.post("/api/lemon/checkout", lemonHandlers.checkout);
+app.post("/api/lemon/webhook", lemonHandlers.webhook);
 
 app.get("/api/user", async (req, res) => {
   try {
@@ -3448,7 +2919,13 @@ app.get("/api/user", async (req, res) => {
 
     const user = planType === "subscription"
       ? await ensureFreshSubscriptionUsage(authContext)
-      : await getUserByIdentity(authContext, planType);
+      : await (async () => {
+          const { data, error } = await getSupabaseClient().rpc("zentra_access", {
+            p_auth_id: authContext.userId, p_email: authContext.email, p_product: "audit"
+          });
+          if (error) throw error;
+          return data;
+        })();
 
     await logAuthDebug(buildAuthDebugPayload({
       emailFromFrontend: req.query.email,
@@ -3483,7 +2960,7 @@ app.get("/api/user", async (req, res) => {
       });
     }
 
-    if (!user || user.status === "cancelled") {
+    if (!user) {
       return res.json({
         plan: "free",
         plan_type: planType,
@@ -3532,6 +3009,8 @@ app.get("/api/user", async (req, res) => {
       plan: user.plan || "free",
       plan_type: user.plan_type || planType,
       status: user.status || "active",
+      audits_used: normalizeCounterValue(user.audits_used),
+      billing_cycle_start: user.billing_cycle_start,
       audit_credits: auditCredits,
       audit_credits_used: auditCreditsUsed,
       audit_credits_remaining: Math.max(auditCredits - auditCreditsUsed, 0),
@@ -3584,7 +3063,7 @@ app.get("/api/subscription/usage", async (req, res) => {
 
     const user = await ensureFreshSubscriptionUsage(authContext);
 
-    if (!user || user.status === "cancelled") {
+    if (!user) {
       logAuthDebug(buildAuthDebugPayload({
         emailFromFrontend: req.query.email,
         identity: authContext,
@@ -3758,6 +3237,12 @@ app.post("/api/subscription/consume", async (req, res) => {
   }
 });
 
+app.post("/api/audit/reserve", createAuditAcquisitionHandler({ client: supabase, isUnlimited: hasUnlimitedAgencyOverride }));
+app.post("/api/audit/release", createAuditAcquisitionHandler({ client: supabase, release: true }));
+app.post("/api/audit/competitive-search", createAuditSearchGuard({ client: supabase }), createCompetitiveSearchHandler({
+  apiKey: process.env.OPENAI_SEARCH_API_KEY || OPENAI_API_KEY, fetchImpl: fetch
+}));
+
 app.post("/api/audit/consume", async (req, res) => {
   try {
     const identity = getIdentityFromRequest(req);
@@ -3843,8 +3328,9 @@ app.post("/api/audit/consume", async (req, res) => {
 app.post("/api/chat/stream", async (req, res) => {
   let streamOpened = false;
   let clientClosed = false;
+  let finalText = "";
 
-  req.on("close", () => {
+  res.on("close", () => {
     clientClosed = true;
   });
 
@@ -3853,7 +3339,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
     res.status(200);
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Cache-Control", "no-store, no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
 
@@ -3913,11 +3399,13 @@ app.post("/api/chat/stream", async (req, res) => {
     };
 
     const fastRoute = {
+      ...chatTierRoute(),
+      plan: premiumPreview.plan || normalizePlan(req.operation?.user?.plan),
       taskType: "chat_basic",
       provider: ZENTRA_CHAT_FAST_PROVIDER,
       model: ZENTRA_CHAT_FAST_MODEL,
-      fallbackProvider: ZENTRA_BASE_PROVIDER,
-      fallbackModel: ZENTRA_BASE_MODEL,
+      fallbackProvider: ZENTRA_CHAT_FAST_PROVIDER,
+      fallbackModel: ZENTRA_CHAT_FAST_MODEL,
       maxTokens: Math.min(maxTokens, 1100)
     };
 
@@ -3944,7 +3432,7 @@ app.post("/api/chat/stream", async (req, res) => {
     }
 
     const fastLayer = normalizeChatFastLayerPayload(fastStep.parsed, fastStep.content);
-    let finalText = firstNonEmptyString(fastLayer.response);
+    finalText = firstNonEmptyString(fastLayer.response);
 
     if (!finalText) {
       throw new Error("La capa rapida no devolvio una respuesta util.");
@@ -3986,6 +3474,7 @@ app.post("/api/chat/stream", async (req, res) => {
       premiumFallbackError: null
     };
 
+    await req.checkpointOperation?.(finalText);
     pushEvent({
       type: "layer",
       phase: "fast",
@@ -4001,7 +3490,7 @@ app.post("/api/chat/stream", async (req, res) => {
     });
 
     const wantsReasoning = requestedPremium && Boolean(fastLayer.needsReasoning);
-    if (wantsReasoning && premiumPreview.premiumAvailable && !clientClosed) {
+    if (wantsReasoning) {
       pushEvent({
         type: "status",
         phase: "reasoning",
@@ -4009,59 +3498,7 @@ app.post("/api/chat/stream", async (req, res) => {
         message: "Priorizando y comparando antes de cerrar la respuesta."
       });
 
-      let reasoningRouting = {
-        ...premiumPreview,
-        premiumActive: false,
-        premiumConsumed: false
-      };
-
-      if (reasoningRouting.counterKey && reasoningRouting.planType !== "audit") {
-        const premiumUsage = await consumeSubscriptionUsage({
-          email: reasoningRouting.email,
-          userId: reasoningRouting.userId || reasoningRouting.authUserId,
-          auth_user_id: reasoningRouting.authUserId || reasoningRouting.userId,
-          identitySource: reasoningRouting.identitySource
-        }, reasoningRouting.counterKey);
-        if (premiumUsage.allowed) {
-          const savedPremiumUsage = premiumUsage.user ? formatSubscriptionUsage(premiumUsage.user) : null;
-          const savedPremiumUsed = normalizeCounterValue(
-            savedPremiumUsage?.advanced_actions_used ??
-            savedPremiumUsage?.premium_chat_used ??
-            premiumUsage.user?.premium_chat_used ??
-            (Number(reasoningRouting.advancedActionsUsed || 0) + 1)
-          );
-          const savedPremiumLimit = normalizeCounterValue(
-            savedPremiumUsage?.advanced_actions_limit ??
-            savedPremiumUsage?.premium_chat_limit ??
-            reasoningRouting.advancedActionsLimit
-          );
-          reasoningRouting = {
-            ...reasoningRouting,
-            premiumAvailable: true,
-            premiumActive: true,
-            premiumConsumed: true,
-            advancedActionsUsed: savedPremiumUsed,
-            advancedActionsLimit: savedPremiumLimit || Number(reasoningRouting.advancedActionsLimit || 0),
-            advancedActionsRemaining: Math.max((savedPremiumLimit || Number(reasoningRouting.advancedActionsLimit || 0)) - savedPremiumUsed, 0),
-            reason: "premium_authorized"
-          };
-        } else {
-          reasoningRouting = {
-            ...reasoningRouting,
-            premiumAvailable: false,
-            premiumActive: false,
-            premiumConsumed: false,
-            reason: premiumUsage.reason || "premium_limit_reached"
-          };
-        }
-      } else {
-        reasoningRouting = {
-          ...reasoningRouting,
-          premiumAvailable: true,
-          premiumActive: true,
-          premiumConsumed: false
-        };
-      }
+      const reasoningRouting = await resolveAiRoutingForRequest(req);
 
       finalRouting = {
         ...finalRouting,
@@ -4075,7 +3512,7 @@ app.post("/api/chat/stream", async (req, res) => {
         reason: reasoningRouting.reason || finalRouting.reason
       };
 
-      if (reasoningRouting.premiumAvailable) {
+      if (reasoningRouting.logicalTier) {
         const reasoningStartedAt = Date.now();
         const reasoningStep = await callLayeredChatStep({
           route: reasoningRouting,
@@ -4124,6 +3561,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
           if (reasoningApplied) {
             finalText = reasoningLayer.response;
+            await req.checkpointOperation?.(finalText);
             pushEvent({
               type: "layer",
               phase: "reasoning",
@@ -4138,7 +3576,7 @@ app.post("/api/chat/stream", async (req, res) => {
             });
           }
 
-          if (shouldAttemptExecutiveChatPolish(fastLayer, reasoningLayer) && !clientClosed) {
+          if (shouldAttemptExecutiveChatPolish(fastLayer, reasoningLayer)) {
             pushEvent({
               type: "status",
               phase: "executive",
@@ -4146,7 +3584,9 @@ app.post("/api/chat/stream", async (req, res) => {
               message: "Ajustando el cierre final para que suene mas claro y senior."
             });
 
-            const executiveRoute = buildChatExecutiveRoute(reasoningRouting);
+            const executiveRoute = buildChatExecutiveRoute(reasoningStep.fallbackError
+              ? { ...reasoningRouting, ...chatTierRoute({ needsReasoning: true }), premiumGranted: reasoningRouting.premiumGranted }
+              : reasoningRouting);
             const executiveStartedAt = Date.now();
             const executiveStep = await callLayeredChatStep({
               route: executiveRoute,
@@ -4186,6 +3626,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
               if (executiveApplied) {
                 finalText = executiveLayer.response;
+                await req.checkpointOperation?.(finalText);
                 finalRouting.provider = executiveStep.provider;
                 finalRouting.model = executiveStep.model;
                 finalRouting.reason = "executive_polish_applied";
@@ -4242,6 +3683,7 @@ app.post("/api/chat/stream", async (req, res) => {
       layers
     };
 
+    if (await req.completeOperation?.(finalText) === false) throw new Error("Execution result not confirmed");
     pushEvent(finalPayload);
     closeStream();
   } catch (error) {
@@ -4249,10 +3691,14 @@ app.post("/api/chat/stream", async (req, res) => {
       return res.status(500).json({ error: "Error en el servidor" });
     }
 
-    pushEvent({
-      type: "error",
-      message: error?.message || "Error en el servidor"
-    });
+    if (finalText) {
+      if (await req.completeOperation?.(finalText) !== false) pushEvent({ type: "final", text: finalText });
+      else pushEvent({ type: "error", message: "La respuesta sigue pendiente de confirmacion." });
+      closeStream();
+      return;
+    }
+    await req.failOperation?.();
+    pushEvent({ type: "error", message: "Error en el servidor" });
     closeStream();
   }
 });
@@ -4296,6 +3742,15 @@ app.post("/api/chat", async (req, res) => {
       renderType: responseContract?.renderType || req.body?.renderType || req.body?.zentra_renderType || null
     };
     const traceResolvedPdfFlow = tracePdfFlow || isPdfFlowTask(aiRouting.taskType);
+    Object.assign(requestContext, chatRequestContext(aiRouting));
+    if (isAuditTask(aiRouting.taskType)) {
+      const workflow = await supabase.rpc("zentra_read_audit_steps", { p_auth_id: req.auth.userId,
+        p_email: req.auth.email, p_product: req.operation.product, p_operation: req.operation.id });
+      if (workflow.error) throw workflow.error;
+      requestContext.auditRouting = auditTelemetryContext({ product: req.operation.product,
+        user: req.operation.user, context: workflow.data?.root?.context, operationId: req.operation.id,
+        task: aiRouting.taskType, reasoningEffort: aiRouting.reasoningEffort });
+    }
     if (traceResolvedPdfFlow) {
       logPdfTrace({
         stage: "chat:routing_resolved",
@@ -4406,7 +3861,8 @@ app.post("/api/chat", async (req, res) => {
         temperature,
         maxTokens: aiRouting.maxTokens,
         requestContext: {
-          ...requestContext,
+          ...chatTechnicalFallbackContext(requestContext),
+          ...(requestContext.auditRouting ? { auditRouting: { ...requestContext.auditRouting, reasoning_effort: "medium" } } : {}),
           routeName: "api/chat:fallback",
           requestedModel: aiRouting.fallbackModel
         }
@@ -4446,14 +3902,53 @@ app.post("/api/chat", async (req, res) => {
         console.log("===== PDF FLOW END =====");
       }
       return res.status(result.status).json({
-        error: getAiErrorMessage(result),
-        provider: result.provider,
-        raw: result.data
+        error: "No se pudo completar la respuesta. Intentá nuevamente."
       });
     }
 
-    const content = getAiResponseText(result);
-    const parsed = parseJsonSafely(content);
+    // Regenerate only this phase inside the existing operation lease, before its response is cached.
+    const consultative = aiRouting.taskType === "seo_analysis" ? await recoverAuditConsultative({
+      initial: result,
+      regenerate: () => callAiProvider({
+        provider: aiRouting.provider, model: aiRouting.model,
+        messages: providerMessages, responseFormat: response_format, temperature,
+        maxTokens: 4096,
+        requestContext: { ...requestContext, auditRecovery: true,
+          auditRouting: { ...requestContext.auditRouting, stage: "recovery", reasoning_effort: "medium" } }
+      }),
+      debug: process.env.NODE_ENV !== "production" && process.env.ZENTRA_AUDIT_JSON_DEBUG === "true",
+      log: diagnostic => console.log("[AUDIT JSON]", diagnostic)
+    }) : null;
+    const consultativeResponse = consultative ? (consultative.analysis || {
+      consultativeStatus: "consultative-degraded",
+      summary: "El analisis consultivo no estuvo disponible. Se conservan las comprobaciones tecnicas del sitio."
+    }) : null;
+    const content = consultative ? JSON.stringify(consultativeResponse) : getAiResponseText(result);
+    const parsed = consultative ? consultativeResponse : parseJsonSafely(content);
+    const usageIdentity = getIdentityFromRequest(req, {
+      email: getEmailFromChatRequest(req, req.body?.zentra_routing || {}),
+      userId: req.body?.zentra_user_id || req.body?.user_id || req.body?.auth_user_id,
+      identitySource: "chat.public_usage"
+    });
+    const usageAuthContext = await resolveIdentityContext(usageIdentity, "subscription");
+    const usageUser = (usageAuthContext.email || usageAuthContext.userId)
+      ? (await ensureFreshSubscriptionUsage(usageAuthContext))
+      : null;
+    const fallbackUsage = getDefaultSubscriptionUser(usageAuthContext);
+    const requestedPlan = normalizePlan(
+      req.body?.zentra_routing?.plan
+      || aiRouting.plan
+      || fallbackUsage.plan
+      || "free"
+    );
+    const usageSnapshot = formatSubscriptionUsage({
+      ...(usageUser || fallbackUsage),
+      plan: normalizePlan((usageUser || fallbackUsage).plan || requestedPlan)
+    });
+    const publicUsage = buildPublicUsagePayload(usageSnapshot);
+    const publicResponse = parsed && typeof parsed === "object" && Object.keys(parsed).length > 0
+      ? parsed
+      : content;
     console.log("[ZENTRA MODEL] OPENAI RESPONSE MODEL:", {
       taskType: aiRouting.taskType,
       requestedModel: req.body?.model || req.body?.zentra_routing?.selectedModel || null,
@@ -4484,28 +3979,9 @@ app.post("/api/chat", async (req, res) => {
 
     res.json({
       success: true,
-      analysis: parsed,
-      raw_content: content,
-      usage: getAiUsage(result),
-      provider: result.provider,
-      model: result.model,
-      id: result.data?.id,
-      zentra_routing: {
-        taskType: aiRouting.taskType,
-        provider: aiRouting.provider,
-        model: aiRouting.model,
-        premiumActive: aiRouting.premiumActive,
-        premiumConsumed: aiRouting.premiumConsumed,
-        premiumAllowed: aiRouting.premiumAllowed,
-        premiumQuotaAvailable: aiRouting.premiumQuotaAvailable,
-        premiumFallbackReason: aiRouting.premiumFallbackReason,
-        counterKey: aiRouting.counterKey,
-        advancedActionsUsed: aiRouting.advancedActionsUsed,
-        advancedActionsLimit: aiRouting.advancedActionsLimit,
-        advancedActionsRemaining: aiRouting.advancedActionsRemaining,
-        reason: aiRouting.reason,
-        premiumFallbackError
-      }
+      response: publicResponse,
+      ...(consultative ? { audit_consultative: consultative.metadata } : {}),
+      usage: publicUsage
     });
 
   } catch (error) {
@@ -4527,6 +4003,9 @@ app.post("/api/chat", async (req, res) => {
     res.status(500).json({ error: "Error en el servidor" });
   }
 });
+
+app.use((_req, res) => res.status(404).json({ error: "Ruta no disponible." }));
+app.use(publicHttpError);
 
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
