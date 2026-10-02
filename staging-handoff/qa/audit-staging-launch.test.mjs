@@ -8,7 +8,7 @@ const { createCompetitiveSearchHandler } = await import(pathToFileURL(backend + 
 const { auditCostTelemetry, auditTelemetryContext, auditTierRoute } = await import(pathToFileURL(backend + '/release-audit-routing.js'));
 const { hasUsableExecutiveRefinement } = await import(pathToFileURL(backend + '/release-executive-refiner.js'));
 const source = fs.readFileSync(backend + '/server.js', 'utf8');
-const meta = auditTelemetryContext({ operationId: 'private-operation', product: 'subscription', user: { id: 'private-user', plan: 'pro' }, task: 'executive_refiner_pdf', reasoningEffort: 'xhigh' });
+const meta = auditTelemetryContext({ operationId: 'private-operation', product: 'subscription', user: { id: 'private-user', plan: 'pro' }, task: 'executive_refiner_pdf', reasoningEffort: 'high' });
 
 test('executive incomplete output exposes only safe reason/status/tokens and hashed operation', () => {
   const event = auditCostTelemetry({ model: 'gpt-6.1-sol', context: { auditRouting: meta },
@@ -17,7 +17,7 @@ test('executive incomplete output exposes only safe reason/status/tokens and has
   assert.equal(event.status, 200); assert.equal(event.provider_status, 'incomplete');
   assert.deepEqual(event.incomplete_details, { reason: 'max_output_tokens' });
   assert.equal(event.output_tokens, 900); assert.equal(event.reasoning_tokens, 890);
-  assert.equal(event.visible_output_tokens, 10); assert.equal(event.reasoning_effort, 'xhigh');
+  assert.equal(event.visible_output_tokens, 10); assert.equal(event.reasoning_effort, 'high');
   assert.equal(event.model, 'gpt-6.1-sol'); assert.match(event.operation_id, /^[a-f0-9]{24}$/);
   assert.doesNotMatch(JSON.stringify(event), /SECRET|private-operation|private-user/);
 });
@@ -46,7 +46,7 @@ test('other stages retain telemetry shape and routing/budget stay unchanged', ()
   assert.ok(!Object.hasOwn(event, 'provider_status')); assert.ok(!Object.hasOwn(event, 'incomplete_details'));
   assert.equal(auditTierRoute('seo_analysis').reasoningEffort, 'medium');
   assert.equal(auditTierRoute('premium_reasoning_audit', true).reasoningEffort, 'high');
-  assert.equal(auditTierRoute('executive_refiner_pdf', true).reasoningEffort, 'xhigh');
+  assert.equal(auditTierRoute('executive_refiner_pdf', true).reasoningEffort, 'high');
   assert.match(source, /process\.env\.ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS \|\| 900/);
   const sql = fs.readFileSync(backend + '/supabase-execution-guard.sql', 'utf8');
   assert.match(sql, /check\(used between 0 and 3\)/);

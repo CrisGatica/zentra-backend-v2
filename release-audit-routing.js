@@ -6,7 +6,7 @@ export function isAuditTask(task) { return tasks.has(task); }
 export function auditTierRoute(task, premiumActive = false) {
   const final = task === "executive_refiner_pdf" && premiumActive;
   return { provider: "openai", model: final ? "gpt-6.1-sol" : "gpt-6-luna",
-    reasoningEffort: final ? "xhigh" : premiumActive ? "high" : "medium",
+    reasoningEffort: premiumActive ? "high" : "medium",
     fallbackProvider: "openai", fallbackModel: "gpt-6-luna" };
 }
 
