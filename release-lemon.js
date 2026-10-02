@@ -114,7 +114,15 @@ export function createLemonHandlers({ client, products, env = process.env, logge
         target = await rpc("zentra_lemon_sync_claim", { p_auth: req.auth.userId });
         if (!target) return next();
         if (target.busy) return safeFailure(res, "billing_sync_pending");
-        if (target.unverified) return safeFailure(res, "billing_association_required");
+        if (target.unverified) {
+          // Only the isolated staging fixture may use a manually assigned DB plan.
+          // Never bypass reconciliation for a linked subscription or another user/environment.
+          const stagingFixture = env.SUPABASE_URL === "https://qfwmjgoiwketpkuhvixm.supabase.co"
+            && env.RENDER_EXTERNAL_HOSTNAME === "zentra-backend-v2-staging.onrender.com"
+            && req.auth.userId === "0f45490e-8049-4af6-8dd8-089628738cef";
+          if (stagingFixture) return next();
+          return safeFailure(res, "billing_association_required");
+        }
         if (target.store !== storeId) throw new Error("Billing store conflict");
         const item = await readSubscription(target.subscription, target.customer);
         await rpc("zentra_lemon_event", { p_key: crypto.createHash("sha256").update("sync:" + JSON.stringify(item)).digest("hex"),
