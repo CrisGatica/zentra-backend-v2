@@ -45,6 +45,7 @@ export function createApiSecurity({ client, origins = "", now = Date.now, env = 
   const maximumIp = positiveLimit(env.ZENTRA_RATE_AUTH_IP, 240);
   const maximumUser = positiveLimit(env.ZENTRA_RATE_USER_LOCAL, 120);
   const buckets = new Map();
+  const statusReadPaths = new Set(['/api/user', '/api/subscription/usage', '/api/subscription/capacity/offers']);
   function limited(key, maximum, windowMs = 60000) {
     const time = now();
     if (buckets.size > 10000) {
@@ -62,8 +63,11 @@ export function createApiSecurity({ client, origins = "", now = Date.now, env = 
     if (!protectedPaths.has(req.path.replace(/\/+$/, "").toLowerCase())) return next();
     const origin = req.get("Origin");
     if (origin && !allowed.has(origin)) return res.status(403).json({ error: "Origen no autorizado." });
-    if (limited("ip:" + req.ip, maximumIp)) {
-      logRateLimit({ source: "zentra_ip", endpoint: req.path, category: "protected", retryAfter: 60 });
+    const statusRead = req.method === 'GET' && statusReadPaths.has(req.path.replace(/\/+$/, '').toLowerCase());
+    const bucketPrefix = statusRead ? 'read:' : '';
+    const category = statusRead ? 'read' : 'protected';
+    if (limited("ip:" + bucketPrefix + req.ip, maximumIp)) {
+      logRateLimit({ source: "zentra_ip", endpoint: req.path, category, retryAfter: 60 });
       return res.set("Retry-After", "60").status(429).json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto.", code: "rate_limited" });
     }
     const match = /^Bearer ([^\s]+)$/i.exec(req.get("Authorization") || "");
@@ -75,8 +79,8 @@ export function createApiSecurity({ client, origins = "", now = Date.now, env = 
       if (error || !user?.id || !user.email || !(user.email_confirmed_at || user.confirmed_at)) {
         return res.status(401).json({ error: "Tu sesión no es válida. Iniciá sesión nuevamente." });
       }
-      if (limited("user:" + user.id, maximumUser)) {
-        logRateLimit({ source: "zentra_user_local", endpoint: req.path, category: "protected", retryAfter: 60 });
+      if (limited("user:" + bucketPrefix + user.id, maximumUser)) {
+        logRateLimit({ source: "zentra_user_local", endpoint: req.path, category, retryAfter: 60 });
         return res.set("Retry-After", "60").status(429).json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto.", code: "rate_limited" });
       }
       req.auth = { userId: user.id, email: user.email.trim().toLowerCase(), identitySource: "verified_session" };
