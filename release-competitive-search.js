@@ -116,7 +116,7 @@ export function createCompetitiveSearchHandler({ apiKey, fetchImpl = fetch, now 
         signal: controller.signal,
         body: JSON.stringify({
           model: "gpt-6-luna",
-          reasoning: { effort: "low" },
+          reasoning: { effort: "high" },
           instructions: "Buscá negocios comparables del mismo rubro y mercado para las consultas proporcionadas. Priorizá la actividad principal sugerida por la primera consulta; compartir solo un servicio secundario no basta para comparar negocios enteros. Si hay fuentes verificables, devolvé hasta tres negocios distintos y concretos; si hay menos, devolvé solo los comprobados. " +
             (scope === "social" ? "Solo perfiles públicos identificables de negocios en Instagram o Facebook; comprobá rubro y, si la consulta es local, localidad. No supongas que carecen de web propia. " :
               "Priorizá webs propias de negocios, no perfiles sociales ni directorios. Si la consulta es local, comprobá localidad; si es regional o global, compará nicho y oferta sin restringir a una ciudad. ") +

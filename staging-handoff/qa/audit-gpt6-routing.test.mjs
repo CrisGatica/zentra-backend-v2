@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import crypto from 'node:crypto';
-import EmbeddedPostgres from 'embedded-postgres';
+import EmbeddedPostgres from './local-postgres.mjs';
 import { auditFixture } from './audit-fixtures.mjs';
 
 const backend = process.env.ZENTRA_BACKEND_DIR, base = process.env.ZENTRA_BASE;
@@ -47,7 +47,7 @@ function runtime() {
       calls.push({ body, url, id });
       const usage = { input_tokens: 1000, input_tokens_details: { cached_tokens: 200 }, output_tokens: 300, output_tokens_details: { reasoning_tokens: 100 } };
       if (body.tools) {
-        assert.equal(body.model, 'gpt-6-luna'); assert.equal(body.reasoning.effort, 'low');
+        assert.equal(body.model, 'gpt-6-luna'); assert.equal(body.reasoning.effort, 'high');
         const n = Math.min(searchSize, body.max_tool_calls);
         const output = Array.from({ length: n }, () => ({ type: 'web_search_call', action: { sources: [{ url: 'https://competitor.test/' }] } }));
         output.push({ type: 'message', content: [{ type: 'output_text', text: '{"results":[]}' }] });

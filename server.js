@@ -2192,7 +2192,8 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
     console.log("[CHAT COST]", telemetry);
   }
   if (requestContext.auditRouting) console.log("[AUDIT COST]", auditCostTelemetry({ model,
-    context: requestContext, usage: data.usage, status: response.status, latencyMs: Date.now() - startedAt }));
+    context: requestContext, usage: data.usage, status: response.status, latencyMs: Date.now() - startedAt,
+    providerStatus: data.status, incompleteDetails: data.incomplete_details }));
 
   return {
     ok: response.ok,

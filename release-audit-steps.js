@@ -209,7 +209,7 @@ export function createAuditSearchGuard({ client, now = Date.now }) {
       const lease = { p_user: begin.data.user_id, p_operation: envelope.id, p_hash: hash, p_lease: begin.data.lease_token };
       req.auditSearch.telemetry = auditTelemetryContext({ product: envelope.product,
         user: { id: begin.data.user_id, plan: data.root.context?.auditScope?.plan }, context: data.root.context,
-        operationId: envelope.id, task: "competitor_search", reasoningEffort: "low" });
+        operationId: envelope.id, task: "competitor_search", reasoningEffort: "high" });
       req.reserveSearchBudget = async () => {
         const reserved = await client.rpc("zentra_reserve_search_budget", lease);
         if (reserved.error || !Number.isInteger(reserved.data) || reserved.data < -1 || reserved.data > 3) {
