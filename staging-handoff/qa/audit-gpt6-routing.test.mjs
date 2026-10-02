@@ -40,7 +40,7 @@ function runtime() {
     createLemonHandlers: opts => ({ ...imports.createLemonHandlers(opts), reconcile: (_req, _res, next) => next() }),
     createCompetitiveSearchHandler: opts => imports.createCompetitiveSearchHandler({ ...opts, logTelemetry: event => telemetry.push(event) }),
     express, cors, crypto, createClient: () => client, Buffer, URL, AbortSignal, Date, setTimeout, clearTimeout, setInterval, clearInterval,
-    process: { env: { SUPABASE_URL: 'https://fixture.test', SUPABASE_SERVICE_ROLE_KEY: 'fixture', OPENAI_API_KEY: 'fixture', USER_ACCESS_HAS_AUTH_USER_ID: 'true', NODE_ENV: 'test' } },
+    process: { env: { SUPABASE_URL: 'https://fixture.test', SUPABASE_SERVICE_ROLE_KEY: 'fixture', OPENAI_API_KEY: 'fixture', USER_ACCESS_HAS_AUTH_USER_ID: 'true', NODE_ENV: 'test', ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS: '5500' } },
     console: { log(label, value) { if (label === '[AUDIT COST]') telemetry.push(value); }, warn() {}, error(...args) { errors.push(args.map(String).join(' ')); } },
     fetch: async (url, opts) => {
       const body = JSON.parse(opts.body), id = imports.operationContext.getStore()?.id;
@@ -94,7 +94,7 @@ async function budget(op) { return Number((await db.query('select used from zent
 try {
   await pg.initialise(); await pg.start(); db = pg.getPgClient(); await db.connect();
   await db.query('create role anon; create role authenticated; create role service_role');
-  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
+  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-search-lifecycle.sql', 'supabase-executive-refiner.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
   await db.query("insert into users(email,auth_user_id,plan) values('alice@example.test','alice','pro')");
   servers = [runtime().listen(0, '127.0.0.1'), runtime().listen(0, '127.0.0.1')];
   await Promise.all(servers.map(s => new Promise(resolve => s.on('listening', resolve))));
@@ -106,6 +106,7 @@ try {
       [['gpt-6-luna', 'medium'], ['gpt-6-luna', ['pro', 'agency'].includes(plan) ? 'high' : 'medium'],
         ...(['pro', 'agency'].includes(plan) ? [['gpt-6.1-sol', 'xhigh']] : [])]);
     assert.ok(calls.filter(c => c.id === op.id).every(c => !('temperature' in c.body) && c.url.endsWith('/responses')));
+    for (const call of calls.filter(c => c.id === op.id && c.body.model === 'gpt-6.1-sol')) assert.equal(call.body.max_output_tokens, 5500);
     const u = (await db.query("select * from users where auth_user_id='alice' and plan_type='subscription'")).rows[0];
     assert.equal(u.audits_used, 1); assert.equal(u.premium_pdf_used, ['pro', 'agency'].includes(plan) ? 1 : 0);
     pass(plan + ': actual Audit routes/efforts, shared receipt, existing premium rights and Responses transport');

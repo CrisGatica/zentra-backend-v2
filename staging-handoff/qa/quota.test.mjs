@@ -27,6 +27,7 @@ try {
   await db.query(await readFile(backend + '/supabase-release-guard.sql', 'utf8'));
   await db.query(await readFile(backend + '/supabase-execution-guard.sql', 'utf8'));
   await db.query(await readFile(backend + '/supabase-execution-guard.sql', 'utf8'));
+  await db.query(await readFile(backend + '/supabase-search-lifecycle.sql', 'utf8'));
   await db.query(await readFile(backend + '/supabase-lemon.sql', 'utf8'));
   passed('migration repeatable');
   const db2 = pg.getPgClient(); await db2.connect(); clients.push(db2);

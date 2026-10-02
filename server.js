@@ -9,7 +9,7 @@ import { createOperationGuard, operationContext } from "./release-operations.js"
 import { logRateLimit, safeRetryAfter } from "./release-rate-observability.js";
 import { validateAudioInput, parseAudioTranscript, fetchAudioResponse } from "./release-audio.js";
 import { createCompetitiveSearchHandler } from "./release-competitive-search.js";
-import { createAuditSearchGuard } from "./release-audit-steps.js";
+import { createAuditSearchGuard, startSearchLeaseReaper } from "./release-audit-steps.js";
 import { createAuditAcquisitionHandler } from "./release-audit-acquisition.js";
 import { recoverAuditConsultative } from "./release-audit-json.js";
 import { createLemonHandlers } from "./release-lemon.js";
@@ -637,7 +637,7 @@ function clampMaxTokens(requestedMaxTokens, taskType = "chat_basic") {
   const requested = normalizeCounterValue(normalizeTaskType(taskType) === "executive_refiner_pdf"
     ? route.maxTokens : requestedMaxTokens || route.maxTokens || 500);
   const routeLimit = normalizeCounterValue(route.maxTokens || 4096);
-  const hardLimit = 4096;
+  const hardLimit = normalizeTaskType(taskType) === "executive_refiner_pdf" ? 5500 : 4096;
   return Math.min(Math.max(requested || 500, 128), routeLimit, hardLimit);
 }
 
@@ -2194,9 +2194,11 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
       operationId: operationContext.getStore()?.id, status: response.status });
     console.log("[CHAT COST]", telemetry);
   }
-  if (requestContext.auditRouting) console.log("[AUDIT COST]", auditCostTelemetry({ model,
+  if (requestContext.auditRouting) console.log("[AUDIT COST]", auditCostTelemetry({ model: data.model || model,
     context: requestContext, usage: data.usage, status: response.status, latencyMs: Date.now() - startedAt,
-    providerStatus: data.status, incompleteDetails: data.incomplete_details }));
+    providerStatus: data.status, incompleteDetails: data.incomplete_details, maxOutputTokens: maxTokens,
+    usableJson: requestContext.auditRouting.stage === "executive_refiner"
+      ? hasUsableExecutiveRefinement({ ok: response.ok, data }, getAiResponseText({ data, provider: "openai", api: useResponsesApi ? "responses" : "chat_completions" })) : undefined }));
 
   return {
     ok: response.ok,
@@ -2333,7 +2335,7 @@ async function callAiProvider({ provider, model, messages, responseFormat, tempe
         operationId: operation?.id, status: "execution_uncertain" }));
     }
     if (requestContext.auditRouting) console.log("[AUDIT COST]", auditCostTelemetry({ model,
-      context: requestContext, status: "execution_uncertain" }));
+      context: requestContext, status: "execution_uncertain", maxOutputTokens: maxTokens, usableJson: false }));
     throw error;
   }
 }
@@ -4030,5 +4032,6 @@ app.use((_req, res) => res.status(404).json({ error: "Ruta no disponible." }));
 app.use(publicHttpError);
 
 app.listen(PORT, () => {
+  startSearchLeaseReaper({ client: supabase });
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });

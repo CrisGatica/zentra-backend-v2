@@ -85,6 +85,7 @@ try {
   await db.query(await readFile(backend + '/supabase-users.sql', 'utf8'));
   await db.query(await readFile(backend + '/supabase-release-guard.sql', 'utf8'));
   await db.query(await readFile(backend + '/supabase-execution-guard.sql', 'utf8'));
+  await db.query(await readFile(backend + '/supabase-search-lifecycle.sql', 'utf8'));
   await db.query(await readFile(backend + '/supabase-http-rate.sql', 'utf8'));
   await db.query(await readFile(backend + '/supabase-lemon.sql', 'utf8'));
   await db.query("insert into users(email,auth_user_id,plan) values('alice@example.test','alice','starter'),('bob@example.test','bob','starter')");
@@ -320,7 +321,7 @@ try {
   const uncertainSearchReply=await post(workers[1],searchBody(uncertainSearchId),'alice','/api/audit/competitive-search');
   assert.equal(uncertainSearchReply.status,409);assert.match(uncertainSearchReply.text,/execution_uncertain/);
   const retainedSearch=(await db.query('select * from zentra_search_requests where operation_key=$1',[uncertainSearchId])).rows[0];
-  assert.equal(retainedSearch.lease_token,initialSearch.lease_token);assert.equal(retainedSearch.state,'running');
+  assert.equal(retainedSearch.lease_token,initialSearch.lease_token);assert.equal(retainedSearch.state,'execution_uncertain');
   assert.equal((await account()).audits_used,1);
   assert.equal((await db.query('select used from zentra_audit_search_budgets where operation_key=$1', [uncertainSearchId])).rows[0].used, 3);
   pass('E/L: search supplier started then SIGKILL/expired: another process cannot regenerate, even with a local cache');

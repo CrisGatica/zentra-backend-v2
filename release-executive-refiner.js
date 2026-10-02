@@ -1,5 +1,5 @@
 export function hasUsableExecutiveRefinement(result, text) {
-  if (!result?.ok || !['completed', 'incomplete', undefined].includes(result.data?.status)) return false;
+  if (!result?.ok || !['completed', undefined].includes(result.data?.status)) return false;
   try {
     const value = JSON.parse(String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;

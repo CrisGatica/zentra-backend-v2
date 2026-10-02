@@ -238,11 +238,14 @@ export function createAuditSearchGuard({ client, now = Date.now }) {
       res.once("close", () => clearInterval(heartbeat));
       const originalJson = res.json.bind(res);
       res.json = async value => {
-        if (res.statusCode === 200 || req.searchConfirmedFailure) {
+        try {
+          // SQL decides certainty from provider-start and settled usage, never HTTP success alone.
           const finished = await client.rpc("zentra_finish_search", {
             ...lease, p_response: { status: res.statusCode, value }, p_success: res.statusCode === 200
           });
-          if (finished.error || finished.data !== true) return originalJson.call(res.status(503), {
+          if (finished.error || finished.data !== true) throw new Error("Search completion unavailable");
+        } catch (_) {
+          return originalJson.call(res.status(503), {
             error: "La busqueda sigue pendiente de confirmacion.", code: "execution_uncertain"
           });
         }
@@ -253,6 +256,24 @@ export function createAuditSearchGuard({ client, now = Date.now }) {
       return res.status(503).json({ error: "No se pudo verificar la auditoria." });
     }
   };
+}
+
+export function startSearchLeaseReaper({ client, schedule = setInterval, logger = console }) {
+  let running = false;
+  const reap = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const result = await client.rpc("zentra_reap_search_leases", { p_user: null });
+      if (result.error) throw result.error;
+      if (result.data > 0) logger.log("[SEARCH LIFECYCLE]", { terminalized: result.data });
+    } catch (_) { logger.warn("[SEARCH LIFECYCLE]", { code: "cleanup_unavailable" }); }
+    finally { running = false; }
+  };
+  void reap();
+  const timer = schedule(reap, 60000);
+  timer.unref?.();
+  return timer;
 }
 
 export async function prepareAuditStep({ client, identity, product, operationId, body }) {

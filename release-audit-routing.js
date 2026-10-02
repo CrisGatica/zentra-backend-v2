@@ -29,7 +29,7 @@ export function auditTelemetryContext({ product, user, context, operationId, tas
 }
 const count = value => Number.isFinite(Number(value)) && Number(value) >= 0 ? Math.floor(Number(value)) : 0;
 const measuredCount = value => value !== undefined && value !== null && Number.isFinite(Number(value)) && Number(value) >= 0 ? Math.floor(Number(value)) : null;
-export function auditCostTelemetry({ model, context, usage, searchCalls = 0, status, latencyMs, providerStatus, incompleteDetails }) {
+export function auditCostTelemetry({ model, context, usage, searchCalls = 0, status, latencyMs, providerStatus, incompleteDetails, maxOutputTokens, usableJson }) {
   const meta = context?.auditRouting;
   if (!meta) return null;
   const input = measuredCount(usage?.input_tokens ?? usage?.prompt_tokens);
@@ -52,6 +52,8 @@ export function auditCostTelemetry({ model, context, usage, searchCalls = 0, sta
     latency_ms: Number.isFinite(latencyMs) ? latencyMs : null, usage_available: usageAvailable, status,
     price_version: "2026-10-01-standard",
     ...(meta.stage === "executive_refiner" ? {
+      max_output_tokens: measuredCount(maxOutputTokens),
+      usable_json: typeof usableJson === "boolean" ? usableJson : null,
       provider_status: ["completed", "incomplete", "failed", "cancelled", "in_progress", "queued"].includes(providerStatus) ? providerStatus : null,
       incomplete_details: providerStatus === "incomplete" && typeof incompleteDetails?.reason === "string"
         ? { reason: ["max_output_tokens", "content_filter"].includes(incompleteDetails.reason) ? incompleteDetails.reason : "unknown" } : null

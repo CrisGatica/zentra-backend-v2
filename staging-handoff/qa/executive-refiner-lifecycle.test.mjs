@@ -18,18 +18,18 @@ test('executive output must contain usable JSON blocks, not HTTP success/reasoni
   for (const value of ['', '{}', '{"error":"fallo"}', '{"summary":null}', '{"summary":"', 'Texto suelto']) {
     assert.equal(hasUsableExecutiveRefinement(result('incomplete', value), value), false);
   }
-  assert.equal(hasUsableExecutiveRefinement(result('incomplete'), text), true);
+  assert.equal(hasUsableExecutiveRefinement(result('incomplete'), text), false);
   assert.equal(hasUsableExecutiveRefinement(result(), '```json\n' + text + '\n```'), true);
   assert.equal(hasUsableExecutiveRefinement({ ...result(), ok: false }, text), false);
   assert.equal(hasUsableExecutiveRefinement(result('failed'), text), false);
 });
 
-test('2200 server budget overrides an older 900 client request only for executive', () => {
+test('5500 server ceiling overrides older client budgets only for executive', () => {
   const fn = source.slice(source.indexOf('function clampMaxTokens('), source.indexOf('function normalizeTemperature('));
   const context = vm.createContext({ normalizeTaskType: value => value, normalizeCounterValue: Number,
-    AI_TASK_ROUTING: { executive_refiner_pdf: { maxTokens: 2200 }, seo_analysis: { maxTokens: 2048 }, chat_basic: { maxTokens: 500 } } });
+    AI_TASK_ROUTING: { executive_refiner_pdf: { maxTokens: 5500 }, seo_analysis: { maxTokens: 2048 }, chat_basic: { maxTokens: 500 } } });
   vm.runInContext(fn, context);
-  assert.equal(context.clampMaxTokens(900, 'executive_refiner_pdf'), 2200);
+  for (const budget of [900, 2200, 4096, 99999]) assert.equal(context.clampMaxTokens(budget, 'executive_refiner_pdf'), 5500);
   assert.equal(context.clampMaxTokens(900, 'seo_analysis'), 900);
   assert.equal(context.clampMaxTokens(500, 'chat_basic'), 500);
   assert.match(source, /process\.env\.ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS \|\| 900/);
@@ -58,7 +58,7 @@ async function route(primary, fallback, releaseError = false) {
   const context = vm.createContext({
     app: { post(_path, fn) { handler = fn; } }, console: { log() {}, warn() {}, error() {} },
     resolveAiRoutingForRequest: async () => ({ taskType: 'executive_refiner_pdf', premiumActive: true,
-      model: 'gpt-6.1-sol', provider: 'openai', fallbackModel: 'gpt-6-luna', fallbackProvider: 'openai', maxTokens: 2200 }),
+      model: 'gpt-6.1-sol', provider: 'openai', fallbackModel: 'gpt-6-luna', fallbackProvider: 'openai', maxTokens: 5500 }),
     isPdfFlowTask: () => true, chatRequestContext: () => ({}), isAuditTask: () => true,
     auditTelemetryContext: () => ({}), supabase: client, sanitizeChatMessages: value => value,
     hasUsableExecutiveRefinement, getAiResponseText: value => value.data?.output_text || '{}',
@@ -88,13 +88,21 @@ test('actual route + guard release blank/incomplete executive, but not the Audit
   assert.equal(run.req.operation.id, run.calls.find(call => call.name === 'zentra_release_executive_premium').args.p_operation);
   assert.ok(run.req.operation.paidCounters.has('audits_used'));
 });
-test('usable completed/incomplete executive is persisted without refund or extra provider', async () => {
-  for (const status of ['completed', 'incomplete']) {
+test('usable completed executive is persisted without refund or extra provider', async () => {
+  for (const status of ['completed']) {
     const run = await route(result(status));
     assert.equal(run.res.statusCode, 200); assert.equal(run.res.body.success, true);
     assert.equal(run.providerCalls.length, 1);
     assert.ok(!run.calls.some(call => call.name === 'zentra_release_executive_premium'));
     assert.equal(run.calls.find(call => call.name === 'zentra_finish_request').args.p_success, true);
+  }
+});
+test('incomplete with visible valid JSON still releases premium; truncated JSON also releases', async () => {
+  for (const output of [text, '{"summary":"visible but truncated']) {
+    const run = await route(result('incomplete', output));
+    assert.equal(run.res.statusCode, 502);
+    assert.equal(run.providerCalls.length, 1);
+    assert.equal(run.calls.filter(call => call.name === 'zentra_release_executive_premium').length, 1);
   }
 });
 test('provider error followed by existing base fallback releases the premium entitlement', async () => {

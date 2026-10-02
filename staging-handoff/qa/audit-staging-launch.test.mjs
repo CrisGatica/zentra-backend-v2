@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 const backend = process.env.ZENTRA_BACKEND_DIR;
 const { createCompetitiveSearchHandler } = await import(pathToFileURL(backend + '/release-competitive-search.js'));
 const { auditCostTelemetry, auditTelemetryContext, auditTierRoute } = await import(pathToFileURL(backend + '/release-audit-routing.js'));
+const { hasUsableExecutiveRefinement } = await import(pathToFileURL(backend + '/release-executive-refiner.js'));
 const source = fs.readFileSync(backend + '/server.js', 'utf8');
 const meta = auditTelemetryContext({ operationId: 'private-operation', product: 'subscription', user: { id: 'private-user', plan: 'pro' }, task: 'executive_refiner_pdf', reasoningEffort: 'xhigh' });
 
@@ -32,6 +33,14 @@ test('completed/missing/unknown statuses do not leak provider content or invent 
   const filtered = auditCostTelemetry({ context: { auditRouting: meta }, providerStatus: 'incomplete', incompleteDetails: { reason: 'content_filter' } });
   assert.deepEqual(filtered.incomplete_details, { reason: 'content_filter' });
 });
+test('5500 is a ceiling, not billed usage; completed JSON availability is explicit', () => {
+  const event = auditCostTelemetry({ model: 'gpt-6.1-sol', context: { auditRouting: meta },
+    maxOutputTokens: 5500, usableJson: true, providerStatus: 'completed', status: 200,
+    usage: { input_tokens: 2250, output_tokens: 2200, output_tokens_details: { reasoning_tokens: 1552 } } });
+  assert.equal(event.max_output_tokens, 5500); assert.equal(event.usable_json, true);
+  assert.equal(event.visible_output_tokens, 648); assert.equal(event.estimated_cost_usd, .0265);
+  assert.equal(event.incomplete_details, null);
+});
 test('other stages retain telemetry shape and routing/budget stay unchanged', () => {
   const event = auditCostTelemetry({ context: { auditRouting: { stage: 'seo_analysis' } }, providerStatus: 'incomplete', incompleteDetails: { reason: 'max_output_tokens' } });
   assert.ok(!Object.hasOwn(event, 'provider_status')); assert.ok(!Object.hasOwn(event, 'incomplete_details'));
@@ -50,16 +59,19 @@ test('actual provider wrapper forwards incomplete details only to safe executive
   const fn = source.slice(source.indexOf('async function callOpenAI('), source.indexOf('async function callAnthropic('));
   const context = vm.createContext({ OPENAI_API_KEY: 'mock-only', Date,
     shouldUseOpenAIResponsesApi: () => true, buildOpenAIResponsesRequestBody: () => ({ body: { input: [] } }),
-    safeRetryAfter: () => null, auditCostTelemetry,
+    safeRetryAfter: () => null, auditCostTelemetry, hasUsableExecutiveRefinement,
+    getAiResponseText: result => result.data?.output_text || '{}',
     console: { log: (label, event) => { if (label === '[AUDIT COST]') events.push(event); } },
     fetch: async () => new Response(JSON.stringify({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
       usage: { input_tokens: 100, output_tokens: 900, output_tokens_details: { reasoning_tokens: 880 } } }), { status: 200 }) });
   vm.runInContext(fn, context);
-  const result = await context.callOpenAI({ model: 'gpt-6.1-sol', maxTokens: 900, requestContext: { auditRouting: meta } });
+  const result = await context.callOpenAI({ model: 'gpt-6.1-sol', maxTokens: 5500, requestContext: { auditRouting: meta } });
   assert.equal(result.status, 200); assert.equal(events.length, 1);
   assert.equal(events[0].provider_status, 'incomplete');
   assert.equal(events[0].incomplete_details.reason, 'max_output_tokens');
   assert.equal(events[0].reasoning_tokens, 880);
+  assert.equal(events[0].max_output_tokens, 5500);
+  assert.equal(events[0].usable_json, false);
 });
 function responseMock() {
   return { status(v) { this.statusCode = v; return this; }, json(v) { this.body = v; return this; } };
