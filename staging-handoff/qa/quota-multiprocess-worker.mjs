@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 
 const backend = process.env.ZENTRA_BACKEND_DIR;
-const { Pool } = await import(process.env.ZENTRA_TEST_PG_MODULE);
+const pgModule = await import(process.env.ZENTRA_TEST_PG_MODULE || './local-postgres.mjs');
+const Pool = pgModule.Pool || pgModule.default?.Pool;
 const { default: express } = await import(pathToFileURL(backend + '/node_modules/express/index.js'));
 const { createApiSecurity } = await import(pathToFileURL(backend + '/release-security.js'));
 const { createDistributedRateLimit } = await import(pathToFileURL(backend + '/release-http-boundary.js'));

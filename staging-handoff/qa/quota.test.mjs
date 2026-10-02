@@ -2,8 +2,8 @@ import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import vm from 'node:vm';
-import EmbeddedPostgres from 'embedded-postgres';
-import { Client } from 'pg';
+import EmbeddedPostgres from './local-postgres.mjs';
+import { Client } from './local-postgres.mjs';
 import { pathToFileURL } from 'node:url';
 import { auditFixture } from './audit-fixtures.mjs';
 

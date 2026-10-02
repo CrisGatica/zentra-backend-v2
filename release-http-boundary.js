@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import { positiveLimit } from "./release-security.js";
+import { logRateLimit } from "./release-rate-observability.js";
 
 export function configureHttpProxy(app, env = process.env) {
   const proxies = String(env.ZENTRA_TRUSTED_PROXY_CIDRS || "").split(",").map(value => value.trim()).filter(Boolean);
@@ -70,8 +71,12 @@ export function createDistributedRateLimit({ client, env = process.env }) {
         p_subject: req.auth.userId, p_category: category, p_maximum: limits[category]
       });
       if (error || typeof data?.allowed !== "boolean") throw new Error("HTTP rate store unavailable");
-      if (!data.allowed) return res.set("Retry-After", String(Math.max(1, Math.min(60, Number(data.retry_after) || 60))))
-        .status(429).json({ error: "Demasiadas solicitudes. Intentá nuevamente más tarde.", code: "rate_limited" });
+      if (!data.allowed) {
+        const retryAfter = Math.max(1, Math.min(60, Number(data.retry_after) || 60));
+        logRateLimit({ source: "zentra_distributed", endpoint: req.path, category, retryAfter });
+        return res.set("Retry-After", String(retryAfter))
+          .status(429).json({ error: "Demasiadas solicitudes. Intentá nuevamente más tarde.", code: "rate_limited" });
+      }
       return next();
     } catch (_) {
       // Fail before reservation/provider work, without returning database diagnostics.

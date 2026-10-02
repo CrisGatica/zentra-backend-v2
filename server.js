@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createApiSecurity, createCorsOptions, publicStreamEvent } from "./release-security.js";
 import { configureHttpProxy, createHttpBoundary, createDistributedRateLimit, minimalHealth, publicHttpError } from "./release-http-boundary.js";
 import { createOperationGuard, operationContext } from "./release-operations.js";
+import { logRateLimit, safeRetryAfter } from "./release-rate-observability.js";
 import { validateAudioInput, parseAudioTranscript, fetchAudioResponse } from "./release-audio.js";
 import { createCompetitiveSearchHandler } from "./release-competitive-search.js";
 import { createAuditSearchGuard } from "./release-audit-steps.js";
@@ -2182,6 +2183,9 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
     if (response.ok) throw error;
     return {};
   });
+  const retryAfter = safeRetryAfter(response.headers?.get?.("Retry-After"));
+  if (response.status === 429) logRateLimit({ source: "provider",
+    endpoint: requestContext.routeName, operationId: operationContext.getStore()?.id, retryAfter });
   if (requestContext.chatRouting) {
     const telemetry = chatCostTelemetry({ model, context: requestContext, usage: data.usage,
       operationId: operationContext.getStore()?.id, status: response.status });
@@ -2193,6 +2197,7 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
   return {
     ok: response.ok,
     status: response.status,
+    retryAfter,
     data,
     provider: "openai",
     model: data.model || model,
@@ -3901,8 +3906,11 @@ app.post("/api/chat", async (req, res) => {
         });
         console.log("===== PDF FLOW END =====");
       }
+      if (result.status === 429 && result.retryAfter) res.set("Retry-After", String(result.retryAfter));
       return res.status(result.status).json({
-        error: "No se pudo completar la respuesta. Intentá nuevamente."
+        error: result.status === 429 ? "El modelo esta temporalmente saturado. Intenta nuevamente en unos momentos."
+          : "No se pudo completar la respuesta. Intentá nuevamente.",
+        ...(result.status === 429 ? { code: "provider_rate_limited" } : {})
       });
     }
 

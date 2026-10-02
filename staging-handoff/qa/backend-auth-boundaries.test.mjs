@@ -7,9 +7,9 @@ import { pathToFileURL } from 'node:url';
 import { auditFixture } from './audit-fixtures.mjs';
 
 const base = process.env.ZENTRA_BASE;
-const backend = base + '/zentra-backend';
+const backend = process.env.ZENTRA_BACKEND_DIR || base + '/zentra-backend';
 const current = await readFile(backend + '/server.js', 'utf8');
-const published = execFileSync('git', ['show', '5adc7635f69042fe8cf343e756033c192f25bead:server.js'], { cwd: backend, encoding: 'utf8' });
+const published = execFileSync('git', ['show', '5adc7635f69042fe8cf343e756033c192f25bead:server.js'], { cwd: base + '/zentra-backend', encoding: 'utf8' });
 let count = 0;
 const pass = name => { count++; console.log('PASS', name); };
 function fn(source, name) {
@@ -146,6 +146,7 @@ assert.equal(starts,1);assert.equal(supplierCalls,1);
 pass('actual provider wrapper: lost transport prevents any automatic fallback/regeneration from the same worker');
 let responseOK=true;
 const decoding=vm.createContext({OPENAI_API_KEY:'fixture-only',shouldUseOpenAIResponsesApi:()=>false,
+  safeRetryAfter:()=>null,
   buildOpenAIRequestBody:()=>({}),fetch:async()=>({ok:responseOK,status:responseOK?200:502,
     json:async()=>{throw new Error('lost response body');}})});
 vm.runInContext(fn(current,'callOpenAI'),decoding);

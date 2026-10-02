@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import crypto from 'node:crypto';
-const deps = createRequire('/tmp/zentra-topic-check-runtime/package.json');
-const { default: EmbeddedPostgres } = await import(pathToFileURL(deps.resolve('embedded-postgres')));
-const { Pool } = deps('pg');
+import EmbeddedPostgres, { Pool } from './local-postgres.mjs';
 const backend = process.env.ZENTRA_BACKEND_DIR;
 const { default: express } = await import(pathToFileURL(backend + '/node_modules/express/index.js'));
 const { default: cors } = await import(pathToFileURL(backend + '/node_modules/cors/lib/index.js'));

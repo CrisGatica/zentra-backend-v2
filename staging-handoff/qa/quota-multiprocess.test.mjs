@@ -3,8 +3,8 @@ import { fork } from 'node:child_process';
 import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import EmbeddedPostgres from 'embedded-postgres';
-import { JSDOM } from 'jsdom';
+import EmbeddedPostgres from './local-postgres.mjs';
+import { JSDOM } from './local-postgres.mjs';
 import { auditFixture } from './audit-fixtures.mjs';
 
 const backend = process.env.ZENTRA_BACKEND_DIR;

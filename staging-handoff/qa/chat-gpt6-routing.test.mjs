@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import crypto from 'node:crypto';
-import EmbeddedPostgres from 'embedded-postgres';
+import EmbeddedPostgres from './local-postgres.mjs';
 
 const backend = process.env.ZENTRA_BACKEND_DIR;
 const base = process.env.ZENTRA_BASE;

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { logRateLimit } from "./release-rate-observability.js";
 
 const protectedPaths = new Set([
   "/api/user", "/api/subscription/usage", "/api/subscription/capacity/offers",
@@ -34,6 +35,7 @@ export function createCorsOptions(origins = "", environment = process.env.NODE_E
     },
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
+    exposedHeaders: ["Retry-After"],
     maxAge: 600
   };
 }
@@ -61,7 +63,8 @@ export function createApiSecurity({ client, origins = "", now = Date.now, env = 
     const origin = req.get("Origin");
     if (origin && !allowed.has(origin)) return res.status(403).json({ error: "Origen no autorizado." });
     if (limited("ip:" + req.ip, maximumIp)) {
-      return res.set("Retry-After", "60").status(429).json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto." });
+      logRateLimit({ source: "zentra_ip", endpoint: req.path, category: "protected", retryAfter: 60 });
+      return res.set("Retry-After", "60").status(429).json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto.", code: "rate_limited" });
     }
     const match = /^Bearer ([^\s]+)$/i.exec(req.get("Authorization") || "");
     if (!match) return res.status(401).json({ error: "Iniciá sesión para continuar." });
@@ -73,7 +76,8 @@ export function createApiSecurity({ client, origins = "", now = Date.now, env = 
         return res.status(401).json({ error: "Tu sesión no es válida. Iniciá sesión nuevamente." });
       }
       if (limited("user:" + user.id, maximumUser)) {
-        return res.set("Retry-After", "60").status(429).json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto." });
+        logRateLimit({ source: "zentra_user_local", endpoint: req.path, category: "protected", retryAfter: 60 });
+        return res.set("Retry-After", "60").status(429).json({ error: "Demasiadas solicitudes. Intentá nuevamente en un minuto.", code: "rate_limited" });
       }
       req.auth = { userId: user.id, email: user.email.trim().toLowerCase(), identitySource: "verified_session" };
       return next();

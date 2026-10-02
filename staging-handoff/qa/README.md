@@ -6,6 +6,10 @@ Las suites SQL usan PostgreSQL efimero mediante embedded-postgres, con auth/prov
 
 Para una futura corrida local autorizada: instalar las dependencias QA de este directorio con su lockfile, instalar el backend raiz, y configurar ZENTRA_BASE con el directorio que contiene las tres variantes aprobadas y zentra-backend; ZENTRA_BACKEND_DIR con ese backend; ZENTRA_TEST_PG_MODULE con la URL file: del pg/esm/index.mjs del entorno QA. Los workers heredan esas rutas. No colocar estas ENV en Render ni usar connection strings Supabase/production. Los puertos efimeros de las suites pueden exigir ejecucion serial.
 
+Las suites routing/cuotas/HTTP pueden resolver dependencias QA ya instaladas mediante ZENTRA_QA_RUNTIME (ruta absoluta al package.json de ese runtime). Es opcional; sin ella usan las dependencias QA de este directorio. El worker multiproceso puede resolver pg desde ese mismo runtime si ZENTRA_TEST_PG_MODULE no esta configurado. Esto evita depender de archivos locales descargados bajo demanda; no cambia dependencias del backend.
+
+Para chat-http-429.test.mjs y audit-wait-diagnostic.test.mjs configurar ZENTRA_CHAT_ROOT con la copia Chrome Lab STAGING externa. Los clientes no pertenecen a este repositorio. El test wait/resume usa el mismo override QA y un watchdog de almacenamiento del harness; no cambia timers ni lifecycle del producto.
+
 La prueba sin DB que si puede ejecutarse desde este repo independiente es:
 
 ```sh
