@@ -97,7 +97,7 @@ test('popup open plus repeated renders and Advanced action/refinements use bound
         return { text: 'Useful final response', routing: { premiumActive: true, counterKey: 'advanced_actions_used' } };
       },
       getEnvironmentContextSummary: () => '', detectContextualSurface: () => 'web',
-      finalizeAssistantDraftMessage: (_draft, text) => { assert.equal(text, 'Useful final response'); completed = true; },
+      finalizeAssistantDraftMessage: async (_draft, text) => { assert.equal(text, 'Useful final response'); completed = true; return true; },
       clearPendingChatRequest: async () => {}, clearPendingImage() {}, clearPendingDocument() {},
       buildSafeAccountAccessGuideFallback: () => null,
       addSystemMessage: message => assert.fail(message), removeAssistantDraftMessage() {}
