@@ -104,7 +104,7 @@ try {
     if (f.calls.length === 3) assert.equal((await step(f, op, 2)).status, 200, errors.join('\n'));
     assert.deepEqual(calls.filter(c => c.id === op.id).map(c => [c.body.model, c.body.reasoning.effort]),
       [['gpt-6-luna', 'medium'], ['gpt-6-luna', ['pro', 'agency'].includes(plan) ? 'high' : 'medium'],
-        ...(['pro', 'agency'].includes(plan) ? [['gpt-6.1-sol', 'high']] : [])]);
+        ...(['pro', 'agency'].includes(plan) ? [['gpt-6.1-sol', 'xhigh']] : [])]);
     assert.ok(calls.filter(c => c.id === op.id).every(c => !('temperature' in c.body) && c.url.endsWith('/responses')));
     for (const call of calls.filter(c => c.id === op.id && c.body.model === 'gpt-6.1-sol')) assert.equal(call.body.max_output_tokens, 5500);
     const u = (await db.query("select * from users where auth_user_id='alice' and plan_type='subscription'")).rows[0];
@@ -181,7 +181,7 @@ try {
   assert.equal(calls.length, beforeExhausted);
   assert.equal(Number((await db.query('select count(*) n from zentra_audit_search_budgets where operation_key=$1', [exhaustedId])).rows[0].n), 0);
   pass('actual exhausted Audit quota: reservation denied before IA/Search, no budget allocated');
-  assert.ok(telemetry.some(e => e.stage === 'executive_refiner' && e.reasoning_effort === 'high' && e.reasoning_tokens === 100 && e.visible_output_tokens === 200));
+  assert.ok(telemetry.some(e => e.stage === 'executive_refiner' && e.reasoning_effort === 'xhigh' && e.reasoning_tokens === 100 && e.visible_output_tokens === 200));
   assert.ok(telemetry.some(e => e.product === 'zentra_audit'));
   assert.ok(telemetry.some(e => e.stage === 'competitor_search' && e.web_search_calls > 0));
   const totalThree = audit.auditCostTotal(telemetry).find(e => e.web_search_calls === 3);
