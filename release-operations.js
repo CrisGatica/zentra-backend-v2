@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { requestFingerprint } from "./release-security.js";
 import { prepareChatStep, buildChatExecutionBody } from "./release-refinements.js";
 import { prepareAuditStep } from "./release-audit-steps.js";
+import { releaseFailedExecutivePremium } from "./release-executive-refiner.js";
 
 export const operationContext = new AsyncLocalStorage();
 const auditTasks = new Set(["seo_analysis","pdf_summary","pdf_polish","premium_reasoning_audit","executive_refiner_pdf"]);
@@ -134,6 +135,10 @@ export function createOperationGuard({ client, isUnlimited = () => false }) {
         const usable = hasUsableResponse(body?.response);
         const text = typeof body?.response === "string" ? body.response : usable ? JSON.stringify(body.response) : "";
         try {
+          if (operation.executivePremiumAttempt && (!operation.executivePremiumUsable
+            || res.statusCode >= 400 || body?.success !== true || !usable)) {
+            await releaseFailedExecutivePremium(client, operation);
+          }
           await finish({ text, body }, res.statusCode < 400 && body?.success === true && usable);
         } catch (_) {
           console.error("[operations] Unable to persist result");

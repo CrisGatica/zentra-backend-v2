@@ -15,6 +15,7 @@ import { recoverAuditConsultative } from "./release-audit-json.js";
 import { createLemonHandlers } from "./release-lemon.js";
 import { CHAT_TIERS, isChatTask, chatTierRoute, chatRequestContext, chatTechnicalFallbackContext, chatCostTelemetry } from "./release-chat-routing.js";
 import { isAuditTask, auditTierRoute, auditTelemetryContext, auditCostTelemetry } from "./release-audit-routing.js";
+import { hasUsableExecutiveRefinement } from "./release-executive-refiner.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -632,7 +633,9 @@ function isPdfFlowTask(taskType = "chat_basic") {
 
 function clampMaxTokens(requestedMaxTokens, taskType = "chat_basic") {
   const route = AI_TASK_ROUTING[normalizeTaskType(taskType)] || AI_TASK_ROUTING.chat_basic;
-  const requested = normalizeCounterValue(requestedMaxTokens || route.maxTokens || 500);
+  // The final refiner budget is server-owned, including when an older client requests 900.
+  const requested = normalizeCounterValue(normalizeTaskType(taskType) === "executive_refiner_pdf"
+    ? route.maxTokens : requestedMaxTokens || route.maxTokens || 500);
   const routeLimit = normalizeCounterValue(route.maxTokens || 4096);
   const hardLimit = 4096;
   return Math.min(Math.max(requested || 500, 128), routeLimit, hardLimit);
@@ -3812,6 +3815,9 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
+    if (aiRouting.taskType === "executive_refiner_pdf") {
+      req.operation.executivePremiumAttempt = Boolean(aiRouting.premiumActive);
+    }
     let result = await callAiProvider({
       provider: aiRouting.provider,
       model: aiRouting.model,
@@ -3821,6 +3827,13 @@ app.post("/api/chat", async (req, res) => {
       maxTokens: aiRouting.maxTokens,
       requestContext
     });
+    if (aiRouting.taskType === "executive_refiner_pdf") {
+      req.operation.executivePremiumUsable = hasUsableExecutiveRefinement(result, getAiResponseText(result));
+      if (result.ok && !req.operation.executivePremiumUsable) {
+        return res.status(502).json({ error: "El refinamiento ejecutivo no produjo contenido utilizable.",
+          code: "executive_refiner_unavailable" });
+      }
+    }
     if (traceResolvedPdfFlow) {
       logPdfTrace({
         stage: "after callAiProvider",
