@@ -17,6 +17,7 @@ const pg = new EmbeddedPostgres({ databaseDir: '/tmp/zentra-audit-gpt6-' + proce
 const calls = [], telemetry = [], errors = [], runtimes = [];
 let db, servers = [], passed = 0, currentOutput, invalidRemaining = 0, searchSize = 1, providerOverride = null, failFinishOnce = false;
 const pass = name => { passed++; console.log('PASS', name); };
+let executiveCase = null;
 const source = await readFile(backend + '/server.js', 'utf8');
 const imports = {};
 for (const line of source.matchAll(/^import \{ ([^}]+) \} from "(\.\/[^" ]+)";/gm)) {
@@ -44,7 +45,7 @@ function runtime() {
     createLemonHandlers: opts => ({ ...imports.createLemonHandlers(opts), reconcile: (_req, _res, next) => next() }),
     createCompetitiveSearchHandler: opts => imports.createCompetitiveSearchHandler({ ...opts, logTelemetry: event => telemetry.push(event) }),
     express, cors, crypto, createClient: () => client, Buffer, URL, AbortSignal, Date, setTimeout, clearTimeout, setInterval, clearInterval,
-    process: { env: { SUPABASE_URL: 'https://fixture.test', SUPABASE_SERVICE_ROLE_KEY: 'fixture', OPENAI_API_KEY: 'fixture', USER_ACCESS_HAS_AUTH_USER_ID: 'true', NODE_ENV: 'test', ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS: '5500' } },
+    process: { env: { SUPABASE_URL: 'https://fixture.test', SUPABASE_SERVICE_ROLE_KEY: 'fixture', OPENAI_API_KEY: 'fixture', USER_ACCESS_HAS_AUTH_USER_ID: 'true', NODE_ENV: 'test', ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS: '900', ZENTRA_EXECUTIVE_REFINER_MODEL: 'legacy-model', ZENTRA_EXECUTIVE_REFINER_REASONING_EFFORT: 'xhigh' } },
     console: { log(label, value) { if (label === '[AUDIT COST]') telemetry.push(value); }, warn() {}, error(...args) { errors.push(args.map(String).join(' ')); } },
     fetch: async (url, opts) => {
       const body = JSON.parse(opts.body), id = imports.operationContext.getStore()?.id;
@@ -61,6 +62,20 @@ function runtime() {
         const output = Array.from({ length: n }, () => ({ type: 'web_search_call', action: { sources: [{ url: 'https://competitor.test/' }] } }));
         output.push({ type: 'message', content: [{ type: 'output_text', text: '{"results":[]}' }] });
         return { ok: true, status: 200, json: async () => ({ status: 'completed', output, usage }) };
+      }
+      if (executiveCase && body.model === 'gpt-6.1-sol') {
+        return { ok: true, status: 200, json: async () => ({ model: body.model,
+          status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
+          output_text: '{"summary":"Priorizar onboarding respaldado', usage }) };
+      }
+      if (executiveCase && JSON.stringify(body.input).includes('partial_visible_output')) {
+        assert.equal(body.model, 'gpt-6-luna'); assert.equal(body.reasoning.effort, 'high');
+        assert.equal(body.max_output_tokens, 2500);
+        assert.ok(JSON.stringify(body.input).includes('Priorizar onboarding respaldado'));
+        return { ok: true, status: 200, json: async () => ({ model: body.model,
+          status: executiveCase === 'success' ? 'completed' : 'incomplete',
+          incomplete_details: executiveCase === 'success' ? null : { reason: 'max_output_tokens' },
+          output_text: executiveCase === 'success' ? '{"summary":"Priorizar onboarding respaldado","quickWins":"Prioridad conservada"}' : '', usage }) };
       }
       const text = invalidRemaining-- > 0 ? '{"summary":"unfinished' : currentOutput;
       return { ok: true, status: 200, json: async () => ({ model: body.model, output_text: text, usage,
@@ -103,7 +118,7 @@ async function budget(op) { return Number((await db.query('select used from zent
 try {
   await pg.initialise(); await pg.start(); db = pg.getPgClient(); await db.connect();
   await db.query('create role anon; create role authenticated; create role service_role');
-  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-search-lifecycle.sql', 'supabase-executive-refiner.sql', 'supabase-premium-reasoning.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
+  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-search-lifecycle.sql', 'supabase-executive-refiner.sql', 'supabase-premium-reasoning.sql', 'supabase-executive-recovery.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
   await db.query("insert into users(email,auth_user_id,plan) values('alice@example.test','alice','pro')");
   servers = [runtime().listen(0, '127.0.0.1'), runtime().listen(0, '127.0.0.1')];
   await Promise.all(servers.map(s => new Promise(resolve => s.on('listening', resolve))));
@@ -113,9 +128,10 @@ try {
     if (f.calls.length === 3) assert.equal((await step(f, op, 2)).status, 200, errors.join('\n'));
     assert.deepEqual(calls.filter(c => c.id === op.id).map(c => [c.body.model, c.body.reasoning.effort]),
       [['gpt-6-luna', 'medium'], ['gpt-6-luna', ['pro', 'agency'].includes(plan) ? 'high' : 'medium'],
-        ...(['pro', 'agency'].includes(plan) ? [['gpt-6.1-sol', 'xhigh']] : [])]);
+        ...(['pro', 'agency'].includes(plan) ? [['gpt-6.1-sol', 'high']] : [])]);
+    const executiveCall = calls.filter(c => c.id === op.id && c.body.model === 'gpt-6.1-sol');
+    if (executiveCall.length) assert.equal(executiveCall[0].body.max_output_tokens, plan === 'agency' ? 6500 : 5500);
     assert.ok(calls.filter(c => c.id === op.id).every(c => !('temperature' in c.body) && c.url.endsWith('/responses')));
-    for (const call of calls.filter(c => c.id === op.id && c.body.model === 'gpt-6.1-sol')) assert.equal(call.body.max_output_tokens, 5500);
     const premiumCall = calls.filter(c => c.id === op.id)[1];
     assert.equal(premiumCall.body.max_output_tokens, ['pro', 'agency'].includes(plan) ? 4000 : 1700);
     const reasoningTelemetry = telemetry.filter(e => e.stage === 'premium_reasoning').at(-1);
@@ -164,6 +180,34 @@ try {
         assert.equal(event.incomplete_details.reason, 'max_output_tokens');
       }
       pass(plan + ': ' + scenario + ' -> refund, no executive/provider duplication, root remains paid');
+    }
+  }
+  for (const plan of ['pro', 'agency']) {
+    for (const mode of ['success', 'failure']) {
+      await reset(plan); const f = await fixture(plan), op = await start(f);
+      assert.equal((await step(f, op, 1)).status, 200);
+      executiveCase = mode;
+      const completed = await step(f, op, 2);
+      assert.equal(completed.status, mode === 'success' ? 200 : 502, completed.text + errors.join('\n'));
+      const providerCalls = calls.filter(c => c.id === op.id);
+      assert.equal(providerCalls.length, 4);
+      assert.equal(providerCalls.filter(c => c.body.model === 'gpt-6.1-sol').length, 1);
+      const countBefore = calls.length;
+      assert.equal((await step(f, op, 2)).status, mode === 'success' ? 200 : 502);
+      assert.equal(calls.length, countBefore);
+      const u = (await db.query("select * from users where auth_user_id='alice' and plan_type='subscription'")).rows[0];
+      assert.equal(u.audits_used, 1); assert.equal(u.premium_pdf_used, mode === 'success' ? 1 : 0);
+      const rows = (await db.query('select counter,refunded_at from zentra_usage_receipts where operation_key=$1', [op.id])).rows;
+      assert.equal(rows.filter(r => r.counter === 'premium_pdf_used').length, 1);
+      assert.equal(Boolean(rows.find(r => r.counter === 'premium_pdf_used').refunded_at), mode === 'failure');
+      const meta = audit.auditTelemetryContext({ product: 'subscription', user: u, operationId: op.id });
+      const events = telemetry.filter(e => e.operation_id === meta.operation_id);
+      assert.deepEqual(events.map(e => e.stage), ['seo_analysis', 'premium_reasoning', 'executive_refiner', 'executive_refiner_recovery']);
+      assert.equal(events.at(-1).max_output_tokens, 2500);
+      assert.equal(events.at(-1).usable_json, mode === 'success');
+      assert.equal(events.at(-1).reasoning_effort, 'high');
+      executiveCase = null;
+      pass(plan + ': actual Sol partial -> one Luna recovery, persisted replay, premium net ' + (mode === 'success' ? 1 : 0));
     }
   }
   await reset('free');
@@ -236,7 +280,7 @@ try {
   assert.equal(calls.length, beforeExhausted);
   assert.equal(Number((await db.query('select count(*) n from zentra_audit_search_budgets where operation_key=$1', [exhaustedId])).rows[0].n), 0);
   pass('actual exhausted Audit quota: reservation denied before IA/Search, no budget allocated');
-  assert.ok(telemetry.some(e => e.stage === 'executive_refiner' && e.reasoning_effort === 'xhigh' && e.reasoning_tokens === 100 && e.visible_output_tokens === 200));
+  assert.ok(telemetry.some(e => e.stage === 'executive_refiner' && e.reasoning_effort === 'high' && e.reasoning_tokens === 100 && e.visible_output_tokens === 200));
   assert.ok(telemetry.some(e => e.product === 'zentra_audit'));
   assert.ok(telemetry.some(e => e.stage === 'competitor_search' && e.web_search_calls > 0));
   const totalThree = audit.auditCostTotal(telemetry).find(e => e.web_search_calls === 3);

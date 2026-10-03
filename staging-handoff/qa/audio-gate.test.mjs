@@ -11,7 +11,7 @@ const source = await readFile(backend + '/server.js', 'utf8');
 const flag = source.match(/^const ZENTRA_AUDIO_TRANSCRIPTION_ENABLED = .*;$/m)?.[0];
 assert.ok(flag, 'actual environment flag declaration');
 const start = source.indexOf('app.post("/api/audio/transcribe",');
-const end = source.indexOf('app.post("/api/lemon/webhook",', start);
+const end = source.indexOf('const lemonHandlers =', start);
 assert.ok(start >= 0 && end > start, 'actual audio handler boundary');
 const route = source.slice(start, end);
 assert.ok(source.indexOf('app.use(createApiSecurity(') < start, 'auth precedes handler');

@@ -6,7 +6,7 @@ export function isAuditTask(task) { return tasks.has(task); }
 export function auditTierRoute(task, premiumActive = false) {
   const final = task === "executive_refiner_pdf" && premiumActive;
   return { provider: "openai", model: final ? "gpt-6.1-sol" : "gpt-6-luna",
-    reasoningEffort: final ? "xhigh" : premiumActive ? "high" : "medium",
+    reasoningEffort: final || premiumActive ? "high" : "medium",
     fallbackProvider: "openai", fallbackModel: "gpt-6-luna" };
 }
 
@@ -51,7 +51,7 @@ export function auditCostTelemetry({ model, context, usage, searchCalls = 0, sta
       ? ((input - cached) * rates.input + cached * rates.cached + output * rates.output) / 1000000 + toolCalls * .01 : null,
     latency_ms: Number.isFinite(latencyMs) ? latencyMs : null, usage_available: usageAvailable, status,
     price_version: "2026-10-01-standard",
-    ...(["executive_refiner", "premium_reasoning"].includes(meta.stage) ? {
+    ...(["executive_refiner", "executive_refiner_recovery", "premium_reasoning"].includes(meta.stage) ? {
       max_output_tokens: measuredCount(maxOutputTokens),
       usable_json: typeof usableJson === "boolean" ? usableJson : null,
       provider_status: ["completed", "incomplete", "failed", "cancelled", "in_progress", "queued"].includes(providerStatus) ? providerStatus : null,

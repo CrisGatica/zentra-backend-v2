@@ -15,7 +15,7 @@ import { recoverAuditConsultative } from "./release-audit-json.js";
 import { createLemonHandlers } from "./release-lemon.js";
 import { CHAT_TIERS, isChatTask, chatTierRoute, chatRequestContext, chatTechnicalFallbackContext, chatCostTelemetry } from "./release-chat-routing.js";
 import { isAuditTask, auditTierRoute, auditTelemetryContext, auditCostTelemetry } from "./release-audit-routing.js";
-import { hasUsableExecutiveRefinement, hasUsablePremiumReasoning } from "./release-executive-refiner.js";
+import { hasUsableExecutiveRefinement, hasUsablePremiumReasoning, executiveRefinerBudget, executiveVisibleText, runExecutiveRefiner } from "./release-executive-refiner.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -670,6 +670,8 @@ async function resolveAiRoutingForRequest(req, options = {}) {
     const premiumGranted = options.consumePremium === false
       ? Boolean(resolved.premiumAllowed && resolved.premiumQuotaAvailable) : Boolean(resolved.premiumActive);
     return { ...resolved, ...auditTierRoute(resolved.taskType, premiumGranted),
+      ...(resolved.taskType === "executive_refiner_pdf" && premiumGranted
+        ? { maxTokens: executiveRefinerBudget(req.operation.user.plan) } : {}),
       // Paid reasoning has a server-owned ceiling, including resumed 1700-token client requests.
       ...(resolved.taskType === "premium_reasoning_audit" && premiumGranted
         ? { maxTokens: AI_TASK_ROUTING.premium_reasoning_audit.premiumMaxTokens } : {}) };
@@ -2204,7 +2206,7 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
   if (requestContext.auditRouting) console.log("[AUDIT COST]", auditCostTelemetry({ model: data.model || model,
     context: requestContext, usage: data.usage, status: response.status, latencyMs: Date.now() - startedAt,
     providerStatus: data.status, incompleteDetails: data.incomplete_details, maxOutputTokens: maxTokens,
-    usableJson: requestContext.auditRouting.stage === "executive_refiner"
+    usableJson: ["executive_refiner", "executive_refiner_recovery"].includes(requestContext.auditRouting.stage)
       ? hasUsableExecutiveRefinement({ ok: response.ok, data }, getAiResponseText({ data, provider: "openai", api: useResponsesApi ? "responses" : "chat_completions" }))
       : requestContext.auditRouting.stage === "premium_reasoning"
         ? hasUsablePremiumReasoning({ ok: response.ok, data }, getAiResponseText({ data, provider: "openai", api: useResponsesApi ? "responses" : "chat_completions" })) : undefined }));
@@ -3832,7 +3834,7 @@ app.post("/api/chat", async (req, res) => {
     if (aiRouting.taskType === "premium_reasoning_audit") {
       req.operation.reasoningPremiumAttempt = Boolean(aiRouting.premiumActive);
     }
-    let result = await callAiProvider({
+    const executePrimary = () => callAiProvider({
       provider: aiRouting.provider,
       model: aiRouting.model,
       messages: providerMessages,
@@ -3841,9 +3843,18 @@ app.post("/api/chat", async (req, res) => {
       maxTokens: aiRouting.maxTokens,
       requestContext
     });
+    let result = req.operation.executivePremiumAttempt ? await runExecutiveRefiner({
+      client: supabase, operation: req.operation, callSol: executePrimary,
+      messages: providerMessages, textOf: executiveVisibleText,
+      callRecovery: recoveryMessages => callAiProvider({ provider: "openai", model: "gpt-6-luna",
+        messages: recoveryMessages, responseFormat: { type: "json_object" }, temperature,
+        maxTokens: 2500, requestContext: { ...requestContext, auditRecovery: true,
+          auditRouting: { ...requestContext.auditRouting, stage: "executive_refiner_recovery", reasoning_effort: "high" } } }),
+      log: event => console.log("[AUDIT EXECUTIVE RECOVERY]", { operation_id: requestContext.auditRouting.operation_id, ...event })
+    }) : await executePrimary();
     if (aiRouting.taskType === "executive_refiner_pdf") {
       req.operation.executivePremiumUsable = hasUsableExecutiveRefinement(result, getAiResponseText(result));
-      if (result.ok && !req.operation.executivePremiumUsable) {
+      if (!req.operation.executivePremiumUsable && (result.ok || result.status === 502)) {
         return res.status(502).json({ error: "El refinamiento ejecutivo no produjo contenido utilizable.",
           code: "executive_refiner_unavailable" });
       }
@@ -3869,7 +3880,8 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    if (!result.ok && aiRouting.premiumActive && aiRouting.fallbackModel && !req.operation.reasoningPremiumAttempt) {
+    if (!result.ok && aiRouting.premiumActive && aiRouting.fallbackModel
+      && !req.operation.reasoningPremiumAttempt && !req.operation.executivePremiumAttempt) {
       premiumFallbackError = getAiErrorMessage(result);
       console.warn("[api:chat] Modelo premium fallo. Reintentando con fallback base.", {
         taskType: aiRouting.taskType,

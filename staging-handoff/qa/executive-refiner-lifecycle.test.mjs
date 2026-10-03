@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import EmbeddedPostgres from './local-postgres.mjs';
 
 const backend = process.env.ZENTRA_BACKEND_DIR;
-const { hasUsableExecutiveRefinement, hasUsablePremiumReasoning } = await import(pathToFileURL(backend + '/release-executive-refiner.js'));
+const { hasUsableExecutiveRefinement, hasUsablePremiumReasoning, runExecutiveRefiner, executiveVisibleText, executiveRefinerBudget } = await import(pathToFileURL(backend + '/release-executive-refiner.js'));
 const { createOperationGuard } = await import(pathToFileURL(backend + '/release-operations.js'));
 const source = fs.readFileSync(backend + '/server.js', 'utf8');
 const text = JSON.stringify({ summary: 'Resumen respaldado', quickWins: 'Prioridad respaldada' });
@@ -39,9 +39,18 @@ async function route(primary, fallback, releaseError = false, { task = 'executiv
   const calls = [], providerCalls = [], id = crypto.randomUUID();
   const reasoning = task === 'premium_reasoning_audit';
   const model = reasoning ? 'gpt-6-luna' : 'gpt-6.1-sol';
-  const body = { messages: [{ role: 'user', content: 'Fixture' }], task_type: task, model };
+  const body = { messages: [{ role: 'user', content: 'CONTEXTO MINIMO:\n{}\nTEXTO A REFINAR:\n{}\nDEVUELVE JSON CON:\n{"summary":"...","quickWins":"..."}' }], task_type: task, model };
+  const journal = {};
   const client = { async rpc(name, args) {
     calls.push({ name, args });
+    if (name === 'zentra_resume_executive') return { data: false };
+    if (name === 'zentra_executive_phase') {
+      const phase = args.p_phase;
+      if (journal[phase]?.state === 'done') return { data: { accepted: true, cached: true, result: journal[phase].result } };
+      if (args.p_result) journal[phase] = { state: 'done', result: args.p_result };
+      else { if (journal[phase]) return { data: { accepted: false } }; journal[phase] = { state: 'started' }; }
+      return { data: { accepted: true } };
+    }
     if (name === 'zentra_read_audit_steps') return { data: { root: { request_hash: 'root', context: {} },
       steps: [{ step_name: task, body }] } };
     if (name === 'zentra_begin_request') return { data: { allowed: true, user: { id: 'fixture', plan },
@@ -64,7 +73,8 @@ async function route(primary, fallback, releaseError = false, { task = 'executiv
       model, provider: 'openai', fallbackModel: 'gpt-6-luna', fallbackProvider: 'openai', maxTokens: reasoning ? 4000 : 5500 }),
     isPdfFlowTask: () => true, chatRequestContext: () => ({}), isAuditTask: () => true,
     auditTelemetryContext: () => ({}), supabase: client, sanitizeChatMessages: value => value,
-    hasUsableExecutiveRefinement, hasUsablePremiumReasoning, getAiResponseText: value => value.data?.output_text ?? '{}',
+    hasUsableExecutiveRefinement, hasUsablePremiumReasoning, runExecutiveRefiner, executiveVisibleText,
+    getAiResponseText: value => value.data?.output_text ?? '{}',
     callAiProvider: async options => {
       providerCalls.push(options);
       if (primary instanceof Error) { req.operation.externalUncertain = true; throw primary; }
@@ -102,26 +112,47 @@ test('usable completed executive is persisted without refund or extra provider',
     assert.equal(run.calls.find(call => call.name === 'zentra_finish_request').args.p_success, true);
   }
 });
-test('incomplete with visible valid JSON still releases premium; truncated JSON also releases', async () => {
+test('partial Sol + Luna success retains exactly one premium receipt and preserves visible content in recovery input', async () => {
+  const partial = '{"summary":"Resumen respaldado","quickWins":"Prioridad respaldada';
+  const run = await route(result('incomplete', partial), { ...result(), model: 'gpt-6-luna' });
+  assert.equal(run.res.statusCode, 200);
+  assert.equal(run.providerCalls.length, 2);
+  const recovery = run.providerCalls[1];
+  assert.equal(recovery.model, 'gpt-6-luna');
+  assert.equal(JSON.parse(recovery.messages[1].content).partial_visible_output, partial);
+  assert.equal(run.res.body.response.summary, 'Resumen respaldado');
+  assert.equal(run.calls.filter(c => c.name === 'zentra_release_executive_premium').length, 0);
+  assert.equal(run.calls.find(c => c.name === 'zentra_finish_request').args.p_success, true);
+});
+test('reasoning never enters persisted/recovery visible output; budgets are plan owned', () => {
+  assert.equal(executiveRefinerBudget('pro'), 5500);
+  assert.equal(executiveRefinerBudget('agency'), 6500);
+  assert.equal(executiveVisibleText({ data: { output: [
+    { type: 'reasoning', content: [{ type: 'output_text', text: 'PRIVATE REASONING' }] },
+    { type: 'message', content: [{ type: 'output_text', text }] }
+  ] } }), text);
+});
+test('incomplete with visible output attempts one recovery; failed recovery releases', async () => {
   for (const output of [text, '{"summary":"visible but truncated']) {
     const run = await route(result('incomplete', output));
     assert.equal(run.res.statusCode, 502);
-    assert.equal(run.providerCalls.length, 1);
+    assert.equal(run.providerCalls.length, 2);
+    assert.equal(run.providerCalls[1].maxTokens, 2500);
+    assert.equal(run.providerCalls[1].requestContext.auditRouting.reasoning_effort, 'high');
     assert.equal(run.calls.filter(call => call.name === 'zentra_release_executive_premium').length, 1);
   }
 });
-test('provider error followed by existing base fallback releases the premium entitlement', async () => {
+test('provider error without partial output refunds without another provider call', async () => {
   const run = await route({ ...result(), ok: false, status: 500 }, { ...result(), model: 'gpt-6-luna' });
-  assert.equal(run.providerCalls.length, 2);
-  assert.equal(run.providerCalls[1].model, 'gpt-6-luna');
+  assert.equal(run.providerCalls.length, 1);
   assert.equal(run.calls.filter(call => call.name === 'zentra_release_executive_premium').length, 1);
 });
-test('timeout releases premium but preserves external uncertainty fencing (no regenerated operation)', async () => {
+test('timeout is durably terminalized and refunded without provider replay', async () => {
   const run = await route(new Error('AbortError'));
   assert.equal(run.providerCalls.length, 1);
   assert.equal(run.calls.filter(call => call.name === 'zentra_release_executive_premium').length, 1);
-  assert.ok(!run.calls.some(call => call.name === 'zentra_finish_request'));
-  assert.equal(run.res.statusCode, 503); assert.equal(run.res.body.code, 'execution_uncertain');
+  assert.ok(run.calls.some(call => call.name === 'zentra_finish_request'));
+  assert.equal(run.res.statusCode, 502);
 });
 test('failed release stays pending rather than falsely confirming cleanup or executing again', async () => {
   const run = await route(result('incomplete', ''), undefined, true);
@@ -181,7 +212,7 @@ before(async () => {
   await pg.initialise(); await pg.start(); db = pg.getPgClient(); await db.connect();
   db2 = pg.getPgClient(); await db2.connect();
   await db.query('create role anon; create role authenticated; create role service_role');
-  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-executive-refiner.sql', 'supabase-executive-refiner.sql', 'supabase-premium-reasoning.sql', 'supabase-premium-reasoning.sql']) {
+  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-executive-refiner.sql', 'supabase-executive-refiner.sql', 'supabase-premium-reasoning.sql', 'supabase-premium-reasoning.sql', 'supabase-executive-recovery.sql', 'supabase-executive-recovery.sql']) {
     await db.query(fs.readFileSync(backend + '/' + file, 'utf8'));
   }
 });
@@ -277,5 +308,71 @@ test('SQL: successful reasoning + executive share exactly one premium debit; rea
     const release = await f.release();
     assert.equal(release.accepted, false); assert.equal(release.reason, 'downstream_premium_owned');
     assert.equal((await f.counters()).premium_pdf_used, 3);
+  }
+});
+
+function journalClient(connection = db) {
+  return { async rpc(name, args) {
+    try { const values = Object.values(args); return { data: (await connection.query(
+      'select ' + name + '(' + values.map((_, i) => '$' + (i + 1)).join(',') + ') r', values)).rows[0].r }; }
+    catch (error) { return { error }; }
+  } };
+}
+const messages = [{ role: 'user', content: 'CONTEXTO MINIMO:\n{"seoScore":80}\nTEXTO A REFINAR:\n{}\nDEVUELVE JSON CON:\n{"summary":"...","quickWins":"..."}' }];
+function runJournal(f, callSol, callRecovery) {
+  return runExecutiveRefiner({ client: journalClient(), operation: { id: f.op, user: { id: f.user },
+    requestHash: f.hash, leaseToken: f.executive.lease_token }, callSol, callRecovery,
+    textOf: executiveVisibleText, messages });
+}
+test('SQL journal: complete Sol is cached across popup/server resume; no second provider or debit', async () => {
+  const f = await fixture(); let count = 0;
+  const invoke = () => { count++; return result(); };
+  await runJournal(f, invoke, () => assert.fail('Recovery must not run'));
+  await runJournal(f, () => assert.fail('Sol must not replay'), () => assert.fail('Recovery must not run'));
+  assert.equal(count, 1); assert.equal((await f.counters()).premium_pdf_used, 3);
+  await db.query('select zentra_finish_request($1,$2,$3,$4,$5,true)', [...f.args, { text }]);
+  assert.ok((await f.begin(f.hash)).cached);
+});
+test('SQL journal: restart after partial Sol resumes only Luna; successful recovery never duplicates on replay', async () => {
+  for (const plan of ['pro', 'agency']) {
+    const f = await fixture('executive_refiner_pdf', plan);
+    const partial = { ...result('incomplete', '{"summary":"Resumen respaldado'), data: {
+      status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: '{"summary":"Resumen respaldado' } };
+    await db.query('select zentra_executive_phase($1,$2,$3,$4,\'sol\',null)', f.args);
+    await db.query('select zentra_executive_phase($1,$2,$3,$4,\'sol\',$5)', [...f.args, partial]);
+    await db.query("update zentra_requests set lease_until=now()-interval '1 second' where user_id=$1 and operation_key=$2 and request_hash=$3", [f.user, f.op, f.hash]);
+    assert.equal((await db.query("select zentra_resume_executive($1,$2,'subscription',$3,$4) r", [f.auth, f.auth + '@example.test', f.op, f.hash])).rows[0].r, true);
+    f.executive = await f.begin(f.hash); assert.ok(f.executive.allowed);
+    let recovery = 0;
+    const recovered = await runJournal(f, () => assert.fail('Sol cannot run after durable checkpoint'), () => { recovery++; return { ...result(), model: 'gpt-6-luna' }; });
+    assert.ok(hasUsableExecutiveRefinement(recovered, executiveVisibleText(recovered)));
+    await runJournal(f, () => assert.fail('No second Sol'), () => assert.fail('No second Luna'));
+    assert.equal(recovery, 1); assert.equal((await f.counters()).premium_pdf_used, 3);
+  }
+});
+test('SQL journal: concurrent phase claims fence duplicate providers and stale callbacks', async () => {
+  const f = await fixture();
+  const claim = connection => connection.query("select zentra_executive_phase($1,$2,$3,$4,'sol',null) r", f.args);
+  const claims = await Promise.all([claim(db), claim(db2)]);
+  assert.equal(claims.filter(c => c.rows[0].r.accepted).length, 1);
+  const stale = await db.query("select zentra_executive_phase($1,$2,$3,$4,'sol',$5) r", [f.user, f.op, f.hash, crypto.randomUUID(), result()]);
+  assert.equal(stale.rows[0].r.accepted, false);
+});
+test('SQL journal: provider uncertainty is terminal, refund safe, never a second Sol/recovery', async () => {
+  for (const phase of ['sol', 'recovery']) {
+    const f = await fixture();
+    await db.query("select zentra_executive_phase($1,$2,$3,$4,'sol',null)", f.args);
+    if (phase === 'recovery') {
+      await db.query("select zentra_executive_phase($1,$2,$3,$4,'sol',$5)", [...f.args, result('incomplete', '{"summary":"partial')]);
+      await db.query("select zentra_executive_phase($1,$2,$3,$4,'recovery',null)", f.args);
+    }
+    await db.query("update zentra_requests set lease_until=now()-interval '1 second' where user_id=$1 and operation_key=$2 and request_hash=$3", [f.user, f.op, f.hash]);
+    await db.query("select zentra_resume_executive($1,$2,'subscription',$3,$4)", [f.auth, f.auth + '@example.test', f.op, f.hash]);
+    f.executive = await f.begin(f.hash);
+    const out = await runJournal(f, () => assert.fail('Uncertain Sol cannot replay'), () => assert.fail('Uncertain recovery cannot replay'));
+    assert.equal(out.ok, false);
+    const release = await db.query('select zentra_release_executive_premium($1,$2,$3,$4) r', [f.user, f.op, f.hash, f.executive.lease_token]);
+    assert.equal(release.rows[0].r.released, true);
+    assert.equal((await f.counters()).premium_pdf_used, 2);
   }
 });

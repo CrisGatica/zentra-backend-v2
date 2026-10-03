@@ -43,6 +43,13 @@ export function createOperationGuard({ client, isUnlimited = () => false }) {
       delete req.body.zentra_acquisition;
       const sourceHash = prepared.sourceHash;
       const fingerprint = requestFingerprint(req.body);
+      if (task === 'executive_refiner_pdf') {
+        const resumed = await client.rpc('zentra_resume_executive', {
+          p_auth_id: req.auth.userId, p_email: req.auth.email, p_product: product,
+          p_operation: operationId, p_hash: fingerprint
+        });
+        if (resumed.error) throw resumed.error;
+      }
       const result = await client.rpc("zentra_begin_request", {
         p_auth_id: req.auth.userId, p_email: req.auth.email, p_product: product,
         p_operation: operationId, p_source: sourceHash, p_hash: fingerprint, p_kind: kind,
@@ -144,7 +151,7 @@ export function createOperationGuard({ client, isUnlimited = () => false }) {
         } catch (_) {
           // A usable reasoning result is not delivered until its stage is durably stored.
           // The RPC rejects stale/completed leases if persistence actually committed.
-          if (operation.reasoningPremiumAttempt && !operation.premiumReleaseAttempted) {
+          if ((operation.reasoningPremiumAttempt || operation.executivePremiumAttempt) && !operation.premiumReleaseAttempted) {
             try { await releaseFailedExecutivePremium(client, operation); }
             catch (_) { console.error("[operations] Unable to release failed premium reasoning"); }
           }
