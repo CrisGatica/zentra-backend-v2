@@ -45,7 +45,12 @@ function fixture() {
     bot.getEnvironmentContextSummary = () => '';
     bot.detectContextualSurface = () => ({ key: 'youtube' });
     bot.createAssistantDraftForRequest = () => ({ lastLiveText: '' });
-    bot.updateAssistantDraftMessage = (draft, data) => { if (draft && data.text) draft.lastLiveText = data.text; };
+    const restoredStages = [];
+    bot.updateAssistantDraftMessage = (draft, data) => {
+      if (draft && data.text) draft.lastLiveText = data.text;
+      if (data.note) restoredStages.push(data.note);
+    };
+    bot.restoredStages = restoredStages;
     bot.removeAssistantDraftMessage = () => { bot.removed = true; };
     bot.addSystemMessage = message => { bot.systemError = message; };
     bot.buildSafeAccountAccessGuideFallback = () => null;
@@ -61,6 +66,11 @@ function fixture() {
       if (!state.cached) { state.providers++; state.debits++; state.cached = true; }
       assert.equal(activeId, operationId);
       if (state.mode === 'generating') return new Promise(() => {});
+      if (state.mode === 'status-wait') {
+        await onEvent({ type: 'status', phase: 'reasoning', message: 'Internal wording must not leak' });
+        await onEvent({ type: 'status', phase: 'fast' });
+        return new Promise(() => {});
+      }
       if (state.mode === 'layer-error') {
         await onEvent({ type: 'layer', phase: 'reasoning', text: answer });
         throw new Error('Simulated transport failure');
@@ -94,6 +104,25 @@ test('send -> close generating -> resume -> complete -> close -> hydrate: one op
     assert.equal(third.bot.conversation.at(-1).operationId, operationId);
     assert.equal(f.state.requests, before); assert.equal(f.state.providers, 1); assert.equal(f.state.debits, 1);
     assert.deepEqual(f.ids, [operationId, operationId]);
+  } finally { f.close(); }
+});
+
+test('real Chat status persists, replay cannot regress stage, resume restores copy without new provider/debit', async () => {
+  const f = fixture();
+  try {
+    f.state.mode = 'status-wait';
+    const first = f.popup();
+    void f.start(first); await f.flush();
+    assert.equal(f.storage['zentra-chat-pending-request'].progressPhase, 'reasoning');
+    assert.deepEqual(first.bot.restoredStages, ['Refinando criterio...']);
+    first.close();
+    f.state.mode = 'complete';
+    const second = f.popup();
+    await f.hydrate(second);
+    assert.ok(second.bot.restoredStages.includes('Refinando criterio...'));
+    assert.equal(f.state.providers, 1);
+    assert.equal(f.state.debits, 1);
+    assert.equal(second.bot.conversation.at(-1).lifecycle, 'complete');
   } finally { f.close(); }
 });
 test('close immediately before delayed history callback: final pending restores without API or consumption', async () => {

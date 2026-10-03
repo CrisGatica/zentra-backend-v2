@@ -50,15 +50,15 @@ try {
   const pending=start();
   await flush();
   assert.equal(typeof resolveAnalysis,'function');
-  assert.equal(window.document.querySelector('#progress-text').textContent,'Analizando estructura SEO...');
+  assert.equal(window.document.querySelector('#progress-text').textContent,'Revisando la estructura SEO...');
   assert.equal(g.isGenerating,true);
   assert.equal(g.progressStageCeiling,49);
   assert.equal(saved[jobKey].status,'running');
   for(let elapsed=0;elapsed<180000;elapsed+=180){now+=180;tick();}
-  assert.ok(g.progressValue>42 && g.progressValue<49);
+  assert.ok(Math.abs(g.progressValue-30)<0.001,'Time alone must not invent progress beyond the observed structure milestone');
   assert.equal(g.isGenerating,true);
   assert.equal(downloaded,0);
-  console.log('PASS: pending promise stays alive for 180 simulated seconds with phase label unchanged and continuous bounded progress');
+  console.log('PASS: pending promise stays alive for 180 simulated seconds at its observed milestone without invented progress');
   resolveAnalysis(analysis);
   await flush();assert.ok(g.progressCompletion, 'Completion animation starts after generation and storage settle');now+=800;tick();
   await pending;
