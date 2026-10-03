@@ -135,12 +135,19 @@ export function createOperationGuard({ client, isUnlimited = () => false }) {
         const usable = hasUsableResponse(body?.response);
         const text = typeof body?.response === "string" ? body.response : usable ? JSON.stringify(body.response) : "";
         try {
-          if (operation.executivePremiumAttempt && (!operation.executivePremiumUsable
-            || res.statusCode >= 400 || body?.success !== true || !usable)) {
+          const failedResponse = res.statusCode >= 400 || body?.success !== true || !usable;
+          if ((operation.executivePremiumAttempt && (!operation.executivePremiumUsable || failedResponse))
+            || (operation.reasoningPremiumAttempt && (!operation.reasoningPremiumUsable || failedResponse))) {
             await releaseFailedExecutivePremium(client, operation);
           }
           await finish({ text, body }, res.statusCode < 400 && body?.success === true && usable);
         } catch (_) {
+          // A usable reasoning result is not delivered until its stage is durably stored.
+          // The RPC rejects stale/completed leases if persistence actually committed.
+          if (operation.reasoningPremiumAttempt && !operation.premiumReleaseAttempted) {
+            try { await releaseFailedExecutivePremium(client, operation); }
+            catch (_) { console.error("[operations] Unable to release failed premium reasoning"); }
+          }
           console.error("[operations] Unable to persist result");
           return originalJson.call(res.status(503), { error: "La respuesta sigue pendiente de confirmacion.", code: "execution_uncertain" });
         }

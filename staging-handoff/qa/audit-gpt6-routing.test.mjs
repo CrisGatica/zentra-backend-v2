@@ -15,7 +15,7 @@ const pg = new EmbeddedPostgres({ databaseDir: '/tmp/zentra-audit-gpt6-' + proce
   user: 'postgres', password: crypto.randomUUID(), port: 55487, persistent: false,
   postgresFlags: ['-h', '127.0.0.1'], onLog() {}, onError() {} });
 const calls = [], telemetry = [], errors = [], runtimes = [];
-let db, servers = [], passed = 0, currentOutput, invalidRemaining = 0, searchSize = 1;
+let db, servers = [], passed = 0, currentOutput, invalidRemaining = 0, searchSize = 1, providerOverride = null, failFinishOnce = false;
 const pass = name => { passed++; console.log('PASS', name); };
 const source = await readFile(backend + '/server.js', 'utf8');
 const imports = {};
@@ -27,6 +27,10 @@ const client = {
   auth: { async getUser(token) { return token === 'alice' ? { data: { user: { id: 'alice', email: 'alice@example.test', confirmed_at: '2026-09-29' } } } : { error: 'invalid' }; },
     admin: { async getUserById(id) { return { data: { user: { id, email: 'alice@example.test', confirmed_at: '2026-09-29' } } }; } } },
   async rpc(name, args) {
+    if (name === 'zentra_finish_request' && failFinishOnce) {
+      failFinishOnce = false;
+      return { error: new Error('Fixture stage storage unavailable') };
+    }
     try {
       const values = Object.values(args), call = name + '(' + values.map((_, i) => '$' + (i + 1)).join(',') + ')';
       return { data: (await db.query('select ' + (name === 'zentra_access' ? 'to_jsonb(' + call + ')' : call) + ' r', values)).rows[0].r };
@@ -45,6 +49,11 @@ function runtime() {
     fetch: async (url, opts) => {
       const body = JSON.parse(opts.body), id = imports.operationContext.getStore()?.id;
       calls.push({ body, url, id });
+      if (providerOverride) {
+        const override = providerOverride; providerOverride = null;
+        if (override instanceof Error) throw override;
+        return { ok: override.status < 400, status: override.status, json: async () => override.data };
+      }
       const usage = { input_tokens: 1000, input_tokens_details: { cached_tokens: 200 }, output_tokens: 300, output_tokens_details: { reasoning_tokens: 100 } };
       if (body.tools) {
         assert.equal(body.model, 'gpt-6-luna'); assert.equal(body.reasoning.effort, 'high');
@@ -94,7 +103,7 @@ async function budget(op) { return Number((await db.query('select used from zent
 try {
   await pg.initialise(); await pg.start(); db = pg.getPgClient(); await db.connect();
   await db.query('create role anon; create role authenticated; create role service_role');
-  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-search-lifecycle.sql', 'supabase-executive-refiner.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
+  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-search-lifecycle.sql', 'supabase-executive-refiner.sql', 'supabase-premium-reasoning.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
   await db.query("insert into users(email,auth_user_id,plan) values('alice@example.test','alice','pro')");
   servers = [runtime().listen(0, '127.0.0.1'), runtime().listen(0, '127.0.0.1')];
   await Promise.all(servers.map(s => new Promise(resolve => s.on('listening', resolve))));
@@ -107,9 +116,55 @@ try {
         ...(['pro', 'agency'].includes(plan) ? [['gpt-6.1-sol', 'xhigh']] : [])]);
     assert.ok(calls.filter(c => c.id === op.id).every(c => !('temperature' in c.body) && c.url.endsWith('/responses')));
     for (const call of calls.filter(c => c.id === op.id && c.body.model === 'gpt-6.1-sol')) assert.equal(call.body.max_output_tokens, 5500);
+    const premiumCall = calls.filter(c => c.id === op.id)[1];
+    assert.equal(premiumCall.body.max_output_tokens, ['pro', 'agency'].includes(plan) ? 4000 : 1700);
+    const reasoningTelemetry = telemetry.filter(e => e.stage === 'premium_reasoning').at(-1);
+    assert.equal(reasoningTelemetry.max_output_tokens, premiumCall.body.max_output_tokens);
+    assert.equal(reasoningTelemetry.usable_json, true);
     const u = (await db.query("select * from users where auth_user_id='alice' and plan_type='subscription'")).rows[0];
     assert.equal(u.audits_used, 1); assert.equal(u.premium_pdf_used, ['pro', 'agency'].includes(plan) ? 1 : 0);
     pass(plan + ': actual Audit routes/efforts, shared receipt, existing premium rights and Responses transport');
+  }
+  for (const plan of ['pro', 'agency']) {
+    for (const scenario of ['reasoning_only', 'incomplete', 'invalid_json', 'provider_error', 'timeout', 'persist_error']) {
+      await reset(plan); const f = await fixture(plan), op = await start(f);
+      const body = { ...f.calls[1], zentra_operation: op.envelope, zentra_acquisition: { token: op.token } };
+      currentOutput = f.outputs.premium_reasoning_audit;
+      if (scenario === 'persist_error') failFinishOnce = true;
+      else providerOverride = scenario === 'timeout' ? new Error('Fixture timeout') : {
+        status: scenario === 'provider_error' ? 500 : 200,
+        data: { model: 'gpt-6-luna', status: ['reasoning_only', 'incomplete'].includes(scenario) ? 'incomplete' : 'completed',
+          incomplete_details: { reason: 'max_output_tokens' },
+          output_text: scenario === 'reasoning_only' ? '' : scenario === 'invalid_json' ? 'invalid JSON' : currentOutput,
+          usage: { input_tokens: 9870, output_tokens: 4000, output_tokens_details: { reasoning_tokens: scenario === 'reasoning_only' ? 4000 : 1500 } } }
+      };
+      const failed = await post(body);
+      assert.ok(failed.status >= 400, scenario + ': ' + failed.text);
+      const operationCalls = calls.filter(c => c.id === op.id);
+      assert.equal(operationCalls.length, 2, scenario + ': ' + failed.text + errors.join('\n'));
+      assert.equal(operationCalls[1].body.max_output_tokens, 4000);
+      const u = (await db.query("select audits_used,premium_pdf_used from users where auth_user_id='alice' and plan_type='subscription'")).rows[0];
+      assert.equal(u.audits_used, 1); assert.equal(u.premium_pdf_used, 0);
+      const receipt = (await db.query("select refunded_at from zentra_usage_receipts where operation_key=$1 and counter='premium_pdf_used'", [op.id])).rows;
+      assert.equal(receipt.length, 1); assert.ok(receipt[0].refunded_at);
+      const beforeExecutive = calls.length;
+      assert.equal((await step(f, op, 2)).status, 409);
+      assert.equal(calls.length, beforeExecutive);
+      if (scenario === 'timeout') {
+        assert.equal((await post(body)).status, 425);
+        await db.query("update zentra_requests set lease_until=now()-interval '1 second' where operation_key=$1 and state='running'", [op.id]);
+        const retry = await post(body);
+        assert.equal(retry.status, 409); assert.equal(JSON.parse(retry.text).code, 'execution_uncertain');
+        assert.equal(calls.length, beforeExecutive);
+      }
+      const event = telemetry.filter(e => e.stage === 'premium_reasoning').at(-1);
+      assert.equal(event.max_output_tokens, 4000);
+      if (scenario === 'reasoning_only') {
+        assert.equal(event.visible_output_tokens, 0); assert.equal(event.usable_json, false);
+        assert.equal(event.incomplete_details.reason, 'max_output_tokens');
+      }
+      pass(plan + ': ' + scenario + ' -> refund, no executive/provider duplication, root remains paid');
+    }
   }
   await reset('free');
   const denied = await fixture('free'), denial = await start(denied);
@@ -187,7 +242,9 @@ try {
   const totalThree = audit.auditCostTotal(telemetry).find(e => e.web_search_calls === 3);
   assert.ok(totalThree && totalThree.estimated_cost_usd > .03);
   assert.doesNotMatch(JSON.stringify(telemetry), /alice|example.test|fixture|summary|content|sk-/);
-  const totals = audit.auditCostTotal(telemetry); assert.ok(totals.every(e => e.estimated_cost_usd > 0 && e.complete));
+  const totals = audit.auditCostTotal(telemetry);
+  assert.ok(totals.every(e => e.complete ? e.estimated_cost_usd > 0 : e.estimated_cost_usd === null));
+  assert.ok(totals.some(e => !e.complete));
   const context = { auditRouting: audit.auditTelemetryContext({ product: 'subscription', operationId: 'private', task: 'seo_analysis', reasoningEffort: 'medium', context: { pageData: { url: 'a', title: 'a', h1Count: 1 }, internalPagesResult: { pages: [{ url: 'b', readStatus: 'partial' }, { url: 'a', readStatus: 'complete' }] } } }) };
   context.auditRouting.secret = 'sk-private';
   const measured = audit.auditCostTelemetry({ model: 'gpt-6-luna', context, usage: { input_tokens: 1000, input_tokens_details: { cached_tokens: 200 }, output_tokens: 300 }, searchCalls: 2 });

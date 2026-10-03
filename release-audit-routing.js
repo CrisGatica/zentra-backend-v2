@@ -51,7 +51,7 @@ export function auditCostTelemetry({ model, context, usage, searchCalls = 0, sta
       ? ((input - cached) * rates.input + cached * rates.cached + output * rates.output) / 1000000 + toolCalls * .01 : null,
     latency_ms: Number.isFinite(latencyMs) ? latencyMs : null, usage_available: usageAvailable, status,
     price_version: "2026-10-01-standard",
-    ...(meta.stage === "executive_refiner" ? {
+    ...(["executive_refiner", "premium_reasoning"].includes(meta.stage) ? {
       max_output_tokens: measuredCount(maxOutputTokens),
       usable_json: typeof usableJson === "boolean" ? usableJson : null,
       provider_status: ["completed", "incomplete", "failed", "cancelled", "in_progress", "queued"].includes(providerStatus) ? providerStatus : null,

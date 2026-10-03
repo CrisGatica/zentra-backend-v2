@@ -15,7 +15,7 @@ import { recoverAuditConsultative } from "./release-audit-json.js";
 import { createLemonHandlers } from "./release-lemon.js";
 import { CHAT_TIERS, isChatTask, chatTierRoute, chatRequestContext, chatTechnicalFallbackContext, chatCostTelemetry } from "./release-chat-routing.js";
 import { isAuditTask, auditTierRoute, auditTelemetryContext, auditCostTelemetry } from "./release-audit-routing.js";
-import { hasUsableExecutiveRefinement } from "./release-executive-refiner.js";
+import { hasUsableExecutiveRefinement, hasUsablePremiumReasoning } from "./release-executive-refiner.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -155,7 +155,8 @@ const AI_TASK_ROUTING = {
     premium: true,
     counterKey: "premium_pdf_used",
     allowedPlans: ["pro", "agency"],
-    maxTokens: 2200
+    maxTokens: 2200,
+    premiumMaxTokens: 4000
   },
   executive_refiner_pdf: {
     ...auditTierRoute("executive_refiner_pdf", true),
@@ -665,8 +666,14 @@ function getPlanTypeFromChatRequest(req, routing = {}) {
 
 async function resolveAiRoutingForRequest(req, options = {}) {
   const resolved = await resolveExistingAiRoutingForRequest(req, options);
-  if (isAuditTask(resolved.taskType)) return { ...resolved, ...auditTierRoute(resolved.taskType,
-    options.consumePremium === false ? Boolean(resolved.premiumAllowed && resolved.premiumQuotaAvailable) : resolved.premiumActive) };
+  if (isAuditTask(resolved.taskType)) {
+    const premiumGranted = options.consumePremium === false
+      ? Boolean(resolved.premiumAllowed && resolved.premiumQuotaAvailable) : Boolean(resolved.premiumActive);
+    return { ...resolved, ...auditTierRoute(resolved.taskType, premiumGranted),
+      // Paid reasoning has a server-owned ceiling, including resumed 1700-token client requests.
+      ...(resolved.taskType === "premium_reasoning_audit" && premiumGranted
+        ? { maxTokens: AI_TASK_ROUTING.premium_reasoning_audit.premiumMaxTokens } : {}) };
+  }
   if (!isChatTask(resolved.taskType)) return resolved;
   const premiumGranted = options.consumePremium === false
     ? Boolean(resolved.premiumAllowed && resolved.premiumQuotaAvailable)
@@ -2198,7 +2205,9 @@ async function callOpenAI({ model, messages, responseFormat, temperature, maxTok
     context: requestContext, usage: data.usage, status: response.status, latencyMs: Date.now() - startedAt,
     providerStatus: data.status, incompleteDetails: data.incomplete_details, maxOutputTokens: maxTokens,
     usableJson: requestContext.auditRouting.stage === "executive_refiner"
-      ? hasUsableExecutiveRefinement({ ok: response.ok, data }, getAiResponseText({ data, provider: "openai", api: useResponsesApi ? "responses" : "chat_completions" })) : undefined }));
+      ? hasUsableExecutiveRefinement({ ok: response.ok, data }, getAiResponseText({ data, provider: "openai", api: useResponsesApi ? "responses" : "chat_completions" }))
+      : requestContext.auditRouting.stage === "premium_reasoning"
+        ? hasUsablePremiumReasoning({ ok: response.ok, data }, getAiResponseText({ data, provider: "openai", api: useResponsesApi ? "responses" : "chat_completions" })) : undefined }));
 
   return {
     ok: response.ok,
@@ -3820,6 +3829,9 @@ app.post("/api/chat", async (req, res) => {
     if (aiRouting.taskType === "executive_refiner_pdf") {
       req.operation.executivePremiumAttempt = Boolean(aiRouting.premiumActive);
     }
+    if (aiRouting.taskType === "premium_reasoning_audit") {
+      req.operation.reasoningPremiumAttempt = Boolean(aiRouting.premiumActive);
+    }
     let result = await callAiProvider({
       provider: aiRouting.provider,
       model: aiRouting.model,
@@ -3836,6 +3848,13 @@ app.post("/api/chat", async (req, res) => {
           code: "executive_refiner_unavailable" });
       }
     }
+    if (req.operation.reasoningPremiumAttempt) {
+      req.operation.reasoningPremiumUsable = hasUsablePremiumReasoning(result, getAiResponseText(result));
+      if (result.ok && !req.operation.reasoningPremiumUsable) {
+        return res.status(502).json({ error: "El razonamiento premium no produjo contenido utilizable.",
+          code: "premium_reasoning_unavailable" });
+      }
+    }
     if (traceResolvedPdfFlow) {
       logPdfTrace({
         stage: "after callAiProvider",
@@ -3850,7 +3869,7 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    if (!result.ok && aiRouting.premiumActive && aiRouting.fallbackModel) {
+    if (!result.ok && aiRouting.premiumActive && aiRouting.fallbackModel && !req.operation.reasoningPremiumAttempt) {
       premiumFallbackError = getAiErrorMessage(result);
       console.warn("[api:chat] Modelo premium fallo. Reintentando con fallback base.", {
         taskType: aiRouting.taskType,

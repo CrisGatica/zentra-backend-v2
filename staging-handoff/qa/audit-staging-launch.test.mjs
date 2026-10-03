@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 const backend = process.env.ZENTRA_BACKEND_DIR;
 const { createCompetitiveSearchHandler } = await import(pathToFileURL(backend + '/release-competitive-search.js'));
 const { auditCostTelemetry, auditTelemetryContext, auditTierRoute } = await import(pathToFileURL(backend + '/release-audit-routing.js'));
-const { hasUsableExecutiveRefinement } = await import(pathToFileURL(backend + '/release-executive-refiner.js'));
+const { hasUsableExecutiveRefinement, hasUsablePremiumReasoning } = await import(pathToFileURL(backend + '/release-executive-refiner.js'));
 const source = fs.readFileSync(backend + '/server.js', 'utf8');
 const meta = auditTelemetryContext({ operationId: 'private-operation', product: 'subscription', user: { id: 'private-user', plan: 'pro' }, task: 'executive_refiner_pdf', reasoningEffort: 'xhigh' });
 
@@ -72,6 +72,29 @@ test('actual provider wrapper forwards incomplete details only to safe executive
   assert.equal(events[0].reasoning_tokens, 880);
   assert.equal(events[0].max_output_tokens, 5500);
   assert.equal(events[0].usable_json, false);
+});
+test('premium reasoning telemetry records the actual 4000 ceiling, reasoning-only output and safe incomplete reason', async () => {
+  const events = [];
+  const routing = { ...meta, stage: 'premium_reasoning', reasoning_effort: 'high' };
+  const fn = source.slice(source.indexOf('async function callOpenAI('), source.indexOf('async function callAnthropic('));
+  const context = vm.createContext({ OPENAI_API_KEY: 'mock-only', Date,
+    shouldUseOpenAIResponsesApi: () => true, buildOpenAIResponsesRequestBody: ({ maxTokens }) => ({ body: { input: [], max_output_tokens: maxTokens } }),
+    safeRetryAfter: () => null, auditCostTelemetry, hasUsablePremiumReasoning,
+    getAiResponseText: result => result.data?.output_text ?? '',
+    console: { log: (label, event) => { if (label === '[AUDIT COST]') events.push(event); } },
+    fetch: async (_url, init) => {
+      assert.equal(JSON.parse(init.body).max_output_tokens, 4000);
+      return new Response(JSON.stringify({ status: 'incomplete', output_text: '',
+        incomplete_details: { reason: 'max_output_tokens', detail: 'PRIVATE' },
+        usage: { input_tokens: 9870, output_tokens: 4000, output_tokens_details: { reasoning_tokens: 4000 } } }), { status: 200 });
+    } });
+  vm.runInContext(fn, context);
+  await context.callOpenAI({ model: 'gpt-6-luna', maxTokens: 4000, requestContext: { auditRouting: routing } });
+  assert.equal(events.length, 1); assert.equal(events[0].max_output_tokens, 4000);
+  assert.equal(events[0].visible_output_tokens, 0); assert.equal(events[0].usable_json, false);
+  assert.equal(events[0].reasoning_effort, 'high'); assert.equal(events[0].model, 'gpt-6-luna');
+  assert.deepEqual(events[0].incomplete_details, { reason: 'max_output_tokens' });
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE|private-operation/);
 });
 function responseMock() {
   return { status(v) { this.statusCode = v; return this; }, json(v) { this.body = v; return this; } };

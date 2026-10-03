@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import EmbeddedPostgres from './local-postgres.mjs';
 
 const backend = process.env.ZENTRA_BACKEND_DIR;
-const { hasUsableExecutiveRefinement } = await import(pathToFileURL(backend + '/release-executive-refiner.js'));
+const { hasUsableExecutiveRefinement, hasUsablePremiumReasoning } = await import(pathToFileURL(backend + '/release-executive-refiner.js'));
 const { createOperationGuard } = await import(pathToFileURL(backend + '/release-operations.js'));
 const source = fs.readFileSync(backend + '/server.js', 'utf8');
 const text = JSON.stringify({ summary: 'Resumen respaldado', quickWins: 'Prioridad respaldada' });
@@ -35,16 +35,19 @@ test('5500 server ceiling overrides older client budgets only for executive', ()
   assert.match(source, /process\.env\.ZENTRA_EXECUTIVE_REFINER_MAX_TOKENS \|\| 900/);
 });
 
-async function route(primary, fallback, releaseError = false) {
+async function route(primary, fallback, releaseError = false, { task = 'executive_refiner_pdf', plan = 'pro', persistError = false } = {}) {
   const calls = [], providerCalls = [], id = crypto.randomUUID();
-  const body = { messages: [{ role: 'user', content: 'Fixture' }], task_type: 'executive_refiner_pdf', model: 'gpt-6.1-sol' };
+  const reasoning = task === 'premium_reasoning_audit';
+  const model = reasoning ? 'gpt-6-luna' : 'gpt-6.1-sol';
+  const body = { messages: [{ role: 'user', content: 'Fixture' }], task_type: task, model };
   const client = { async rpc(name, args) {
     calls.push({ name, args });
     if (name === 'zentra_read_audit_steps') return { data: { root: { request_hash: 'root', context: {} },
-      steps: [{ step_name: 'executive_refiner_pdf', body }] } };
-    if (name === 'zentra_begin_request') return { data: { allowed: true, user: { id: 'fixture', plan: 'pro' },
+      steps: [{ step_name: task, body }] } };
+    if (name === 'zentra_begin_request') return { data: { allowed: true, user: { id: 'fixture', plan },
       lease_token: 'lease', paid_counters: ['audits_used', 'premium_pdf_used'] } };
     if (name === 'zentra_release_executive_premium' && releaseError) return { error: new Error('Fixture storage failure') };
+    if (name === 'zentra_finish_request' && persistError) return { error: new Error('Fixture persist failure') };
     if (name === 'zentra_release_executive_premium' || name === 'zentra_finish_request') return { data: { accepted: true } };
     throw new Error('Unexpected RPC ' + name);
   } };
@@ -57,11 +60,11 @@ async function route(primary, fallback, releaseError = false) {
   let handler;
   const context = vm.createContext({
     app: { post(_path, fn) { handler = fn; } }, console: { log() {}, warn() {}, error() {} },
-    resolveAiRoutingForRequest: async () => ({ taskType: 'executive_refiner_pdf', premiumActive: true,
-      model: 'gpt-6.1-sol', provider: 'openai', fallbackModel: 'gpt-6-luna', fallbackProvider: 'openai', maxTokens: 5500 }),
+    resolveAiRoutingForRequest: async () => ({ taskType: task, premiumActive: true,
+      model, provider: 'openai', fallbackModel: 'gpt-6-luna', fallbackProvider: 'openai', maxTokens: reasoning ? 4000 : 5500 }),
     isPdfFlowTask: () => true, chatRequestContext: () => ({}), isAuditTask: () => true,
     auditTelemetryContext: () => ({}), supabase: client, sanitizeChatMessages: value => value,
-    hasUsableExecutiveRefinement, getAiResponseText: value => value.data?.output_text || '{}',
+    hasUsableExecutiveRefinement, hasUsablePremiumReasoning, getAiResponseText: value => value.data?.output_text ?? '{}',
     callAiProvider: async options => {
       providerCalls.push(options);
       if (primary instanceof Error) { req.operation.externalUncertain = true; throw primary; }
@@ -72,7 +75,9 @@ async function route(primary, fallback, releaseError = false) {
     normalizePlan: value => value, formatSubscriptionUsage: value => value, buildPublicUsagePayload: value => value
   });
   vm.runInContext(source.slice(source.indexOf('app.post("/api/chat", async'), source.indexOf('\napp.use((_req, res) => res.status(404)')), context);
+  const finished = new Promise(resolve => res.once('finish', resolve));
   await createOperationGuard({ client })(req, res, () => handler(req, res));
+  await finished;
   return { calls, providerCalls, req, res };
 }
 
@@ -126,6 +131,48 @@ test('failed release stays pending rather than falsely confirming cleanup or exe
   assert.ok(!run.calls.some(call => call.name === 'zentra_finish_request'));
 });
 
+test('Pro/Agency reasoning rejects reasoning-only, incomplete, malformed and provider errors with one refund', async () => {
+  for (const plan of ['pro', 'agency']) {
+    for (const primary of [result('incomplete', ''), result('completed', ''), result('incomplete'),
+      result('completed', '{"summary":"truncated'), result('completed', '{}'),
+      { ...result(), ok: false, status: 500 }, new Error('Timeout')]) {
+      const run = await route(primary, undefined, false, { task: 'premium_reasoning_audit', plan });
+      assert.ok(run.res.statusCode >= 400);
+      assert.equal(run.providerCalls.length, 1);
+      assert.equal(run.providerCalls[0].maxTokens, 4000);
+      assert.equal(run.providerCalls[0].model, 'gpt-6-luna');
+      assert.equal(run.calls.filter(c => c.name === 'zentra_release_executive_premium').length, 1);
+      assert.ok(run.req.operation.paidCounters.has('audits_used'));
+      assert.ok(!run.req.operation.paidCounters.has('premium_pdf_used'));
+      assert.ok(run.calls.every(c => !c.args?.p_operation || c.args.p_operation === run.req.operation.id));
+      if (!(primary instanceof Error)) assert.equal(run.calls.find(c => c.name === 'zentra_finish_request').args.p_success, false);
+      else assert.ok(!run.calls.some(c => c.name === 'zentra_finish_request'));
+    }
+  }
+});
+test('usable reasoning persists without refund; failure to persist refunds and stays recoverable', async () => {
+  for (const plan of ['pro', 'agency']) {
+    for (const persistError of [false, true]) {
+      const run = await route(result(), undefined, false, { task: 'premium_reasoning_audit', plan, persistError });
+      assert.equal(run.res.statusCode, persistError ? 503 : 200);
+      assert.equal(run.providerCalls.length, 1);
+      assert.equal(run.calls.filter(c => c.name === 'zentra_release_executive_premium').length, persistError ? 1 : 0);
+      assert.equal(run.calls.find(c => c.name === 'zentra_finish_request').args.p_success, true);
+    }
+    const run = await route(result('incomplete', ''), undefined, true, { task: 'premium_reasoning_audit', plan });
+    assert.equal(run.res.statusCode, 503);
+    assert.equal(run.calls.filter(c => c.name === 'zentra_release_executive_premium').length, 1);
+    assert.ok(!run.calls.some(c => c.name === 'zentra_finish_request'));
+  }
+});
+test('premium reasoning accepts only completed usable structured content', () => {
+  for (const output of [text, '{"recommendations":[{"action":"Priorizar onboarding"}]}', '{"topIssues":["Friccion documentada"]}']) {
+    assert.ok(hasUsablePremiumReasoning(result(), output));
+    assert.equal(hasUsablePremiumReasoning(result('incomplete'), output), false);
+  }
+  for (const output of ['', '{}', '{"summary":""}', '{"error":"failure"}', 'Texto suelto']) assert.equal(hasUsablePremiumReasoning(result(), output), false);
+});
+
 const pg = new EmbeddedPostgres({ databaseDir: '/tmp/zentra-executive-pg-' + process.pid,
   user: 'postgres', password: crypto.randomUUID(), port: 55485, persistent: false,
   postgresFlags: ['-h', '127.0.0.1'], onLog() {}, onError() {} });
@@ -134,18 +181,18 @@ before(async () => {
   await pg.initialise(); await pg.start(); db = pg.getPgClient(); await db.connect();
   db2 = pg.getPgClient(); await db2.connect();
   await db.query('create role anon; create role authenticated; create role service_role');
-  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-executive-refiner.sql', 'supabase-executive-refiner.sql']) {
+  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-executive-refiner.sql', 'supabase-executive-refiner.sql', 'supabase-premium-reasoning.sql', 'supabase-premium-reasoning.sql']) {
     await db.query(fs.readFileSync(backend + '/' + file, 'utf8'));
   }
 });
 after(async () => { await db2?.end(); await db?.end(); await pg.stop(); });
-async function fixture() {
+async function fixture(stage = 'executive_refiner_pdf', plan = 'pro') {
   const auth = crypto.randomUUID(), op = crypto.randomUUID(), root = 'a'.repeat(64), hash = 'b'.repeat(64);
-  await db.query("insert into users(email,auth_user_id,plan,premium_pdf_used) values($1,$2,'pro',2)", [auth + '@example.test', auth]);
+  await db.query("insert into users(email,auth_user_id,plan,premium_pdf_used) values($1,$2,$3,2)", [auth + '@example.test', auth, plan]);
   const begin = async requestHash => (await db.query("select zentra_begin_request($1,$2,'subscription',$3,$4,$5,'audit',false) r", [auth, auth + '@example.test', op, root, requestHash])).rows[0].r;
   const first = await begin(root), user = first.user.id;
   await db.query('select zentra_finish_request($1,$2,$3,$4,$5,true)', [user, op, root, first.lease_token, { text: 'Technical report' }]);
-  await db.query("insert into zentra_audit_steps(user_id,operation_key,step_name,request_hash,body) values($1,$2,'executive_refiner_pdf',$3,'{}')", [user, op, hash]);
+  await db.query("insert into zentra_audit_steps(user_id,operation_key,step_name,request_hash,body) values($1,$2,$3,$4,'{}')", [user, op, stage, hash]);
   const executive = await begin(hash);
   await db.query("select zentra_consume_generation($1,$2,'subscription','premium_pdf_used',$3,$4,$5,false)", [auth, auth + '@example.test', op, hash, executive.lease_token]);
   const args = [user, op, hash, executive.lease_token];
@@ -163,9 +210,9 @@ test('SQL: concurrent releases are idempotent, preserve root and unrelated premi
   await db.query('select zentra_finish_request($1,$2,$3,$4,null,false)', f.args);
   assert.deepEqual(await f.counters(), { audits_used: 1, premium_pdf_used: 2 });
 });
-test('SQL: stale/wrong leases and non-executive stages cannot refund', async () => {
+test('SQL: stale/wrong leases and non-premium stages cannot refund', async () => {
   const f = await fixture(); assert.equal((await f.release(db, crypto.randomUUID())).accepted, false);
-  await db.query("update zentra_audit_steps set step_name='premium_reasoning_audit' where user_id=$1 and operation_key=$2", [f.user, f.op]);
+  await db.query("update zentra_audit_steps set step_name='seo_analysis' where user_id=$1 and operation_key=$2", [f.user, f.op]);
   assert.equal((await f.release()).accepted, false); assert.equal((await f.counters()).premium_pdf_used, 3);
 });
 test('SQL: completed output is protected from later releases; retries cannot double debit', async () => {
@@ -198,5 +245,37 @@ test('SQL: old billing cycle cannot decrement new usage; refund RPC is service-r
   for (const role of ['anon', 'authenticated', 'service_role']) {
     const permission = await db.query("select has_function_privilege($1, 'zentra_release_executive_premium(uuid,text,text,uuid)', 'EXECUTE') allowed", [role]);
     assert.equal(permission.rows[0].allowed, role === 'service_role');
+  }
+});
+
+test('SQL: Pro/Agency failed reasoning refunds exactly once under concurrent callbacks, preserves Audit and fences stale leases', async () => {
+  for (const plan of ['pro', 'agency']) {
+    const f = await fixture('premium_reasoning_audit', plan);
+    assert.equal((await f.release(db, crypto.randomUUID())).accepted, false);
+    const releases = await Promise.all([f.release(db), f.release(db2)]);
+    assert.equal(releases.filter(r => r.released).length, 1);
+    await db.query('select zentra_finish_request($1,$2,$3,$4,null,false)', f.args);
+    assert.deepEqual(await f.counters(), { audits_used: 1, premium_pdf_used: 2 });
+    const receipts = await db.query("select counter,refunded_at from zentra_usage_receipts where user_id=$1 and operation_key=$2", [f.user, f.op]);
+    assert.ok(receipts.rows.find(r => r.counter === 'premium_pdf_used').refunded_at);
+    assert.equal(receipts.rows.find(r => r.counter === 'audits_used').refunded_at, null);
+  }
+});
+test('SQL: successful reasoning + executive share exactly one premium debit; reasoning cannot refund downstream work', async () => {
+  for (const plan of ['pro', 'agency']) {
+    const f = await fixture('premium_reasoning_audit', plan), hash = 'c'.repeat(64);
+    await db.query('select zentra_finish_request($1,$2,$3,$4,$5,true)', [...f.args, { text }]);
+    await db.query("insert into zentra_audit_steps(user_id,operation_key,step_name,request_hash,body) values($1,$2,'executive_refiner_pdf',$3,'{}')", [f.user, f.op, hash]);
+    const exec = await f.begin(hash);
+    const consumed = await db.query("select zentra_consume_generation($1,$2,'subscription','premium_pdf_used',$3,$4,$5,false) r", [f.auth, f.auth + '@example.test', f.op, hash, exec.lease_token]);
+    assert.equal(consumed.rows[0].r.duplicate, true);
+    await db.query('select zentra_finish_request($1,$2,$3,$4,$5,true)', [f.user, f.op, hash, exec.lease_token, { text }]);
+    assert.deepEqual(await f.counters(), { audits_used: 1, premium_pdf_used: 3 });
+    assert.equal((await f.release()).accepted, false);
+    // Simulate an old reasoning callback still marked running: it cannot refund executive work.
+    await db.query("update zentra_requests set state='running',lease_until=now()+interval '1 minute' where user_id=$1 and operation_key=$2 and request_hash=$3", [f.user, f.op, f.hash]);
+    const release = await f.release();
+    assert.equal(release.accepted, false); assert.equal(release.reason, 'downstream_premium_owned');
+    assert.equal((await f.counters()).premium_pdf_used, 3);
   }
 });
