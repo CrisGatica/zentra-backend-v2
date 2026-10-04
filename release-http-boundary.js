@@ -56,6 +56,7 @@ export function rateCategory(path, method) {
   if (path === "/api/audit/competitive-search") return "search";
   if (["/api/audit/reserve", "/api/audit/release"].includes(path)) return "audit";
   if (["/api/subscription/consume", "/api/audit/consume"].includes(path)) return "consume";
+  if (path === "/api/subscription/free/notify") return "consume";
   if (["/api/user", "/api/subscription/usage", "/api/subscription/capacity/offers"].includes(path)) return "read";
   return null;
 }

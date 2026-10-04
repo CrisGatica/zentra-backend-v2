@@ -4,6 +4,7 @@ import { requestFingerprint } from "./release-security.js";
 import { prepareChatStep, buildChatExecutionBody } from "./release-refinements.js";
 import { prepareAuditStep } from "./release-audit-steps.js";
 import { releaseFailedExecutivePremium } from "./release-executive-refiner.js";
+import { sendFreeAccessBlock } from "./release-free-launch.js";
 
 export const operationContext = new AsyncLocalStorage();
 const auditTasks = new Set(["seo_analysis","pdf_summary","pdf_polish","premium_reasoning_audit","executive_refiner_pdf"]);
@@ -59,6 +60,7 @@ export function createOperationGuard({ client, isUnlimited = () => false }) {
       if (result.error) throw result.error;
       const reservation = result.data;
       if (!reservation?.allowed) {
+        if (sendFreeAccessBlock(res, reservation)) return;
         const status = reservation?.reason === "in_progress" ? 425 :
           reservation?.reason === "usage_limit_reached" ? 403 : 409;
         return res.set("Retry-After", "2").status(status).json({

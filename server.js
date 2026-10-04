@@ -11,6 +11,7 @@ import { validateAudioInput, parseAudioTranscript, fetchAudioResponse } from "./
 import { createCompetitiveSearchHandler } from "./release-competitive-search.js";
 import { createAuditSearchGuard, startSearchLeaseReaper } from "./release-audit-steps.js";
 import { createAuditAcquisitionHandler } from "./release-audit-acquisition.js";
+import { createFreeNotifyHandler } from "./release-free-launch.js";
 import { recoverAuditConsultative } from "./release-audit-json.js";
 import { createLemonHandlers } from "./release-lemon.js";
 import { CHAT_TIERS, isChatTask, chatTierRoute, chatRequestContext, chatTechnicalFallbackContext, chatCostTelemetry } from "./release-chat-routing.js";
@@ -1560,10 +1561,11 @@ function formatSubscriptionUsage(user = {}) {
   const baseAuditsUsed = normalizeCounterValue(user.audits_used);
   const premiumChatUsed = normalizeCounterValue(user.premium_chat_used);
   const premiumPdfUsed = normalizeCounterValue(user.premium_pdf_used);
-  const extraActionsBalance = normalizeCounterValue(user.extra_actions_balance);
-  const extraAuditsBalance = normalizeCounterValue(user.extra_audits_balance);
-  const extraActionsUsedCycle = normalizeCounterValue(user.extra_actions_used_cycle);
-  const extraAuditsUsedCycle = normalizeCounterValue(user.extra_audits_used_cycle);
+  const promotionalFree = user.free_access && user.free_access.state !== "paid";
+  const extraActionsBalance = promotionalFree ? 0 : normalizeCounterValue(user.extra_actions_balance);
+  const extraAuditsBalance = promotionalFree ? 0 : normalizeCounterValue(user.extra_audits_balance);
+  const extraActionsUsedCycle = promotionalFree ? 0 : normalizeCounterValue(user.extra_actions_used_cycle);
+  const extraAuditsUsedCycle = promotionalFree ? 0 : normalizeCounterValue(user.extra_audits_used_cycle);
   const extraActionsPurchasedTotal = normalizeCounterValue(user.extra_actions_purchased_total);
   const extraAuditsPurchasedTotal = normalizeCounterValue(user.extra_audits_purchased_total);
   const actionsLimit = limits.actions + extraActionsBalance + extraActionsUsedCycle;
@@ -1586,6 +1588,7 @@ function formatSubscriptionUsage(user = {}) {
     subscription_ends_at: user.subscription_ends_at || null,
     subscription_renews_at: user.subscription_renews_at || null,
     billing_policy_pending: Boolean(user.billing_policy_pending),
+    free_access: user.free_access || null,
     actions_used: actionsUsed,
     actions_limit: actionsLimit,
     actions_remaining: Math.max(actionsLimit - actionsUsed, 0),
@@ -1641,6 +1644,14 @@ async function ensureFreshSubscriptionUsage(identityOrEmail) {
     p_auth_id: identity.userId, p_email: identity.email, p_product: "subscription"
   });
   if (error) throw error;
+  if (data && !(data.status === "active" && data.plan !== "free") && !hasUnlimitedAgencyOverride(identity.email)) {
+    const status = await getSupabaseClient().rpc("zentra_free_status", {
+      p_auth_id: identity.userId, p_email: identity.email, p_product: "subscription"
+    });
+    if (status.error || !status.data) throw status.error || new Error("Free state unavailable");
+    Object.assign(data, status.data.usage);
+    data.free_access = status.data;
+  }
   return hasUnlimitedAgencyOverride(identity.email)
     ? applyUnlimitedAgencySubscriptionUser(identity.email, data) : data;
 }
@@ -3043,6 +3054,8 @@ app.get("/api/user", async (req, res) => {
     return res.status(500).json({ error: "Error consultando usuario" });
   }
 });
+
+app.post("/api/subscription/free/notify", createFreeNotifyHandler({ client: supabase }));
 
 app.get("/api/subscription/usage", async (req, res) => {
   try {

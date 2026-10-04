@@ -89,7 +89,11 @@ async function post(body, path = '/api/chat', server = servers[0]) {
   const res = await fetch('http://127.0.0.1:' + server.address().port + path, { method: 'POST', headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   return { status: res.status, text: await res.text() };
 }
-async function reset(plan) { await db.query("update users set plan=$1,audits_used=0,premium_pdf_used=0 where auth_user_id='alice' and plan_type='subscription'", [plan]); }
+async function reset(plan) {
+  await db.query("delete from zentra_free_receipts where auth_user_id='alice'");
+  await db.query("delete from zentra_free_access where auth_user_id='alice'");
+  await db.query("update users set plan=$1,audits_used=0,premium_pdf_used=0 where auth_user_id='alice' and plan_type='subscription'", [plan]);
+}
 async function fixture(plan = 'pro', domain = crypto.randomUUID() + '.example.test') {
   return auditFixture(clean, plan, { webResults: [], socialResults: [],
     consultativeResponse: JSON.stringify({ summary: 'Partner management software for partner programs.', topIssues: [],
@@ -118,7 +122,7 @@ async function budget(op) { return Number((await db.query('select used from zent
 try {
   await pg.initialise(); await pg.start(); db = pg.getPgClient(); await db.connect();
   await db.query('create role anon; create role authenticated; create role service_role');
-  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-search-lifecycle.sql', 'supabase-executive-refiner.sql', 'supabase-premium-reasoning.sql', 'supabase-executive-recovery.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
+  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-search-lifecycle.sql', 'supabase-executive-refiner.sql', 'supabase-premium-reasoning.sql', 'supabase-executive-recovery.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql', 'supabase-free-launch.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
   await db.query("insert into users(email,auth_user_id,plan) values('alice@example.test','alice','pro')");
   servers = [runtime().listen(0, '127.0.0.1'), runtime().listen(0, '127.0.0.1')];
   await Promise.all(servers.map(s => new Promise(resolve => s.on('listening', resolve))));

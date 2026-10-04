@@ -5,7 +5,8 @@ const protectedPaths = new Set([
   "/api/user", "/api/subscription/usage", "/api/subscription/capacity/offers",
   "/api/subscription/consume", "/api/audit/consume", "/api/audit/competitive-search", "/api/audio/transcribe",
   "/api/audit/reserve", "/api/audit/release",
-  "/api/chat", "/api/chat/stream", "/api/lemon/checkout"
+  "/api/chat", "/api/chat/stream", "/api/lemon/checkout",
+  "/api/subscription/free/notify"
 ]);
 
 export function allowedOrigins(origins = "", environment = process.env.NODE_ENV || "production") {

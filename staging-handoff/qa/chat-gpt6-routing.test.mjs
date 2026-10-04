@@ -76,6 +76,9 @@ async function send(body, path = '/api/chat', target = server, token = 'alice') 
   return { status: res.status, text };
 }
 async function reset(plan, advanced = 0) {
+  // Each routing case is an independent account fixture, not a new Free batch.
+  await db.query("delete from zentra_free_receipts where auth_user_id='alice'");
+  await db.query("delete from zentra_free_access where auth_user_id='alice'");
   await db.query("update users set plan=$1, actions_used=0, premium_chat_used=$2 where auth_user_id='alice'", [plan, advanced]);
 }
 async function user() { return (await db.query("select * from users where auth_user_id='alice'")).rows[0]; }
@@ -84,7 +87,7 @@ function routed(id) { return calls.filter(call => call.id === id).map(call => [c
 try {
   await pg.initialise(); await pg.start(); db = pg.getPgClient(); await db.connect();
   await db.query('create role anon; create role authenticated; create role service_role');
-  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
+  for (const file of ['supabase-users.sql', 'supabase-release-guard.sql', 'supabase-execution-guard.sql', 'supabase-http-rate.sql', 'supabase-lemon.sql', 'supabase-free-launch.sql']) await db.query(await readFile(backend + '/' + file, 'utf8'));
   await db.query("insert into users(email,auth_user_id,plan) values('alice@example.test','alice','free')");
   server = runtime().listen(0, '127.0.0.1'); server2 = runtime().listen(0, '127.0.0.1');
   await Promise.all([server, server2].map(value => new Promise(resolve => value.on('listening', resolve))));
@@ -109,6 +112,17 @@ try {
   assert.equal((await send(normal)).status, 200, errors.join('\n'));
   assert.deepEqual(routed(normal.zentra_operation.id), [['gpt-6-luna', 'medium']]);
   assert.equal((await user()).premium_chat_used, 0); assert.equal((await user()).actions_used, 1);
+  const usageResponse = await fetch('http://127.0.0.1:' + server.address().port + '/api/subscription/usage',
+    { headers: { Authorization: 'Bearer alice' } });
+  assert.equal(usageResponse.status, 200);
+  const launchUsage = await usageResponse.json();
+  assert.equal(launchUsage.plan, 'free');
+  assert.equal(launchUsage.actions_limit, 20);
+  assert.equal(launchUsage.audits_limit, 1);
+  assert.equal(launchUsage.actions_used, 1);
+  assert.equal(launchUsage.free_access.state, 'free_active');
+  assert.equal(launchUsage.free_access.actions_remaining, 19);
+  assert.equal(launchUsage.free_access.usage.actions_used, launchUsage.actions_used);
   pass('actual direct handler: normal Luna Medium, one normal receipt, no advanced');
 
   for (const [plan, cap] of [['free', 3], ['starter', 30], ['pro', 100], ['agency', 300]]) {

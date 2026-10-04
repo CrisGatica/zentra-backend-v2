@@ -1,0 +1,128 @@
+FREE LAUNCH - STAGING LOCAL
+Fecha: 2026-10-04
+Estado: implementado y validado localmente. NO desplegado ni migrado remotamente.
+
+ESTADOS
+free_eligible: no uso de la promocion; registro/login/lectura no activan.
+free_active: activacion unica por Auth ID, fecha de vencimiento persistida.
+free_waitlist: capacidad agotada o nuevas activaciones deshabilitadas.
+free_expired: promocion utilizada y vencida; no se renueva en otra tanda.
+paid: plan pago activo existente tiene precedencia.
+Bloqueos adicionales: free_actions_exhausted, free_audits_exhausted, free_exhausted.
+Son respuestas estructuradas del backend, no inferencias de Chrome por mensajes de error.
+
+CONFIGURACION
+Tabla public.zentra_free_launch_config, fila singleton=true:
+capacity_total=300, access_days=30, enabled=true, activated_total=0 inicialmente.
+La configuracion se inserta solo si no existe: reaplicar no resetea capacidad ni consumo.
+Para abrir otra tanda, un administrador puede ejecutar en STAGING:
+UPDATE public.zentra_free_launch_config SET capacity_total=800 WHERE singleton=true;
+No editar activated_total, que registra activaciones acumuladas.
+Cambiar access_days afecta solo activaciones futuras. No modifica vencimientos existentes.
+enabled=false impide nuevas activaciones; no corta accesos ya activos.
+No hay constantes de capacidad/duracion en Chrome.
+
+ATOMICIDAD Y CONSUMO
+zentra_consume conserva el contrato y comprobantes existentes.
+En la primera accion real toma locks de usuario, registro Auth de la promocion y configuracion.
+Revisa vencimiento, cuota y capacidad antes del proveedor y antes del crawl de Audit.
+Activacion, incremento acumulado y reserva de consumo ocurren en una transaccion.
+El mismo submit continua; no requiere segundo click.
+Un unico Auth ID comparte promocion/contadores entre productos.
+Se corrigio tambien la carrera de creacion de la fila de usuario para solicitudes simultaneas.
+El usuario 301 recibe free_access_blocked + estado comercial, sin consumo/proveedor.
+Expirar o devolver una accion fallida NO libera una activacion acumulada.
+Los comprobantes activos y respuestas cacheadas conservan el resume existente.
+Las fases de una operacion ya reservada no reclaman otra promocion ni consumen otra accion.
+
+CUENTAS EXISTENTES
+No hay backfill que active todas las cuentas ni reseteo de sus contadores.
+La siguiente accion nueva intenta activar la promocion conservando el uso vigente.
+Las filas Free existentes de ambos productos comparten su consumo.
+Los counters promocionales lifetime y los comprobantes privados evitan renovaciones al pasar
+por un ciclo pago y luego volver a Free.
+La compra de un plan no borra el historial de la promocion.
+Si la suscripcion paga termina, vuelve el mismo acceso Free, si sigue vigente; no otra prueba.
+Los extras pagos no amplian la cuota de la promocion; sus balances persistidos no se borran.
+
+WAITLIST Y UI
+Nuevo modal nativo accesible, light/dark, con navegacion reducida si reduced-motion.
+waitlist: "Esta tanda Free ya se completo" + aviso / opciones de pago.
+Preferencia notify_free_opening se guarda por identidad autenticada; no se confia en body.userId.
+No se implemento proveedor de email ni se envio ninguna notificacion.
+Campana futura: seleccionar notify_free_opening=true, ever_used=false y waitlisted_at no nulo.
+acciones agotadas: muestra auditorias restantes y fecha devueltas por backend, Ir a Auditorias.
+auditorias agotadas: muestra acciones restantes y fecha devueltas por backend, Seguir con Chat.
+todo agotado: "Ya aprovechaste todo tu acceso Free".
+vencido: "Tu acceso Free llego hasta aca".
+Todos permiten Ver opciones -> nueva pestana https://tryzentra.app/#planes.
+Las denegaciones comerciales no crean errores de sistema ni dejan pending reanudable en Chat.
+El transporte streaming no intenta otro transporte para una denegacion comercial.
+El preflight Free difiere la decision al RPC de reserva; no calcula capacidad ni vencimiento.
+No se modificaron los prompts, modelos, Search ni el contenido/render del PDF.
+
+MIGRACION
+Archivo nuevo: /Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/supabase-free-launch.sql
+Aplicar ULTIMO, despues de todas las migraciones actuales de STAGING, especialmente
+supabase-users.sql, supabase-release-guard.sql, supabase-execution-guard.sql y supabase-lemon.sql.
+No reaplicar una version antigua de las funciones base por encima de esta migracion.
+Tablas nuevas: zentra_free_launch_config, zentra_free_access, zentra_free_receipts.
+RPCs nuevas: zentra_free_status, zentra_free_notify (solo service_role).
+Wrappers: zentra_access y zentra_consume; se conservan las implementaciones previas.
+Trigger privado sobre comprobantes: debit/refund/retry lifetime idempotente.
+RLS y revocacion de acceso anon/authenticated a tablas/configuracion/RPCs.
+Endpoint nuevo autenticado: POST /api/subscription/free/notify, con rate limit existente consume.
+GET /api/subscription/usage incorpora free_access y snapshot consistente de consumo.
+
+TESTS
+Suite completa: 133/133 PASS, 0 fallos, 0 omitidos.
+Log: /tmp/zentra-free-launch-final-qa.log
+Revalidacion final Free + Chat routing/usage: 20/20 PASS.
+Log: /tmp/zentra-free-launch-postreview-qa.log
+Sintaxis: 13 archivos JavaScript PASS. git diff --check PASS.
+PostgreSQL efimero local, localhost exclusivamente.
+300/301 grants concurrentes; creacion Auth concurrente repetida;
+Chat + Audit y productos diferentes, idempotencia, preferencias, capacidad dinamica,
+pausa, expiracion, cuotas parciales/totales, legacy, compra/precedencia paga,
+refund/retry, completion replay tras expiracion, bloqueo antes de proveedor/crawl,
+transportes reales del cliente y cleanup comercial sin errores de historial.
+Regresiones Chat/Audit/routing/Search/premium/recovery/concurrencia/Lemon existentes verdes.
+Los proveedores y Auth remotos fueron simulados. No se ejecuto un Audit/OpenAI real.
+El symlink temporal de dependencias QA fue eliminado.
+No hubo revision visual en Chrome real: modal comprobado localmente con DOM y estilos.
+Pendiente prueba interactiva de modal light/dark despues de activar backend y migracion.
+
+ARCHIVOS DE ESTA TAREA - BACKEND
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/server.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/release-operations.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/release-audit-acquisition.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/release-security.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/release-http-boundary.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/release-free-launch.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/supabase-free-launch.sql
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/staging-handoff/qa/free-launch.test.mjs
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/staging-handoff/qa/chat-gpt6-routing.test.mjs
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/staging-handoff/qa/audit-gpt6-routing.test.mjs
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/zentra-backend/staging-handoff/free-launch-report.txt
+
+ARCHIVOS DE ESTA TAREA - EXTENSION STAGING (FUERA DEL GIT BACKEND)
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/free-launch-ui.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/popup.html
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/popup.css
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/subscription-manager.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/ai-provider.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/zentra-api-client.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/claude-integration.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/claude-chatbot.js
+/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING/claude-pdf-generator.js
+En claude-pdf-generator.js solo se reconoce/muestra la denegacion comercial previa al crawl.
+
+GIT / ENTREGA
+Branch actual: staging.
+HEAD/base, sin commit nuevo: 590f8dfaf92282ac7e10027e153203b4768ab80f.
+main intacto: a8e5af81a5b15ec0734aa43e5f218e96e919dd78.
+Cambios anteriores de lifecycle/progreso y archivos no relacionados preservados sin mezclar.
+NO commit, push, deploy, SQL remoto, compras, package ni cambios de produccion.
+Para activar: revisar/aplicar migracion en Supabase STAGING, desplegar backend STAGING
+con estos cambios y luego recargar SOLO Zentra AI - STAGING en chrome://extensions.
+Recargar Chrome por si solo NO activa la politica mientras el backend remoto siga anterior.

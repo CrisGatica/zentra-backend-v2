@@ -1,5 +1,6 @@
 import { auditEntitlement } from "./release-entitlements.js";
 import { auditPublicUrl } from "./release-audit-urls.js";
+import { sendFreeAccessBlock } from "./release-free-launch.js";
 
 export function createAuditAcquisitionHandler({ client, release = false, isUnlimited = () => false }) {
   return async (req, res) => {
@@ -31,6 +32,7 @@ export function createAuditAcquisitionHandler({ client, release = false, isUnlim
       const { data, error } = await client.rpc(release ? "zentra_release_audit" : "zentra_acquire_audit", args);
       if (error) throw error;
       if (release) return res.json({ released: data === true });
+      if (!data?.allowed && sendFreeAccessBlock(res, data)) return;
       if (!data?.allowed) return res.status(data?.reason === "in_progress" ? 425 : data?.reason === "usage_limit_reached" ? 403 : 409).json({
         error: data?.reason === "usage_limit_reached" ? "Alcanzaste el limite de tu plan." : "La auditoria sigue pendiente de confirmacion.",
         code: data?.reason || "operation_conflict"
