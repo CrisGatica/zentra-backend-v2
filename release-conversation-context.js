@@ -32,9 +32,16 @@ export function normalizeConversationContext(input) {
       .filter(item => record(item) && MEDIA_TYPES.has(item.type))
       .map(item => ({ type: item.type, label: string(item.label, 200) }));
     // Deliberately omit media URLs/pixels/tokens: metadata cannot trigger downloads or vision.
+    const audio = record(message.audio) ? {
+      native_status: ['available','unavailable'].includes(message.audio.native_status) ? message.audio.native_status : 'unknown',
+      duration_ms: Number.isSafeInteger(message.audio.duration_ms) && message.audio.duration_ms > 0 && message.audio.duration_ms <= 86400000 ? message.audio.duration_ms : null
+    } : null;
     messages.push({ id: string(message.id, 128), direction: message.direction,
       sender: string(message.sender, 200) || null, timestamp: string(message.timestamp, 80) || null,
-      type: message.type, text, partial, media });
+      type: message.type, text, partial, media,
+      ...(audio ? {audio} : {}),
+      ...(message.type === 'audio_transcript' && message.source === 'zentra_transcript'
+        ? {source:'zentra_transcript',audio_id:string(message.audio_id || message.id,128)} : {}) });
   }
   const contact = record(input.contact) ? input.contact : {};
   const output = { schema_version: 'zentra.conversation.v1', platform: input.platform.trim().slice(0, 80),

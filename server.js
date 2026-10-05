@@ -8,6 +8,7 @@ import { configureHttpProxy, createHttpBoundary, createDistributedRateLimit, min
 import { createOperationGuard, operationContext } from "./release-operations.js";
 import { logRateLimit, safeRetryAfter } from "./release-rate-observability.js";
 import { validateAudioInput, parseAudioTranscript, fetchAudioResponse } from "./release-audio.js";
+import { createConversationAudioHandlers, createAudioTranscriber } from './release-conversation-audio.js';
 import { createCompetitiveSearchHandler } from "./release-competitive-search.js";
 import { createAuditSearchGuard, startSearchLeaseReaper } from "./release-audit-steps.js";
 import { createAuditAcquisitionHandler } from "./release-audit-acquisition.js";
@@ -2895,6 +2896,13 @@ function writeNdjsonEvent(res, payload = {}) {
 }
 
 app.get(["/api/health", "/health"], minimalHealth);
+
+let conversationAudio;
+const getConversationAudio = () => conversationAudio ||= createConversationAudioHandlers({client:supabase,
+  transcribe:createAudioTranscriber({fetchImpl:fetch,apiKey:OPENAI_API_KEY}),providerReady:()=>Boolean(OPENAI_API_KEY)});
+app.get('/api/conversation/audio/config',(req,res)=>getConversationAudio().config(req,res));
+app.post('/api/conversation/audio/prepare',(req,res)=>getConversationAudio().prepare(req,res));
+app.post('/api/conversation/audio/process',(req,res)=>getConversationAudio().process(req,res));
 
 app.post("/api/audio/transcribe", async (req, res) => {
   if (!ZENTRA_AUDIO_TRANSCRIPTION_ENABLED) {

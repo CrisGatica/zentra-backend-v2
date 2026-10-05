@@ -52,7 +52,7 @@ export function rateCategory(path, method) {
   path = path.replace(/\/+$/, "").toLowerCase();
   if (method === "OPTIONS") return null;
   if (["/api/chat", "/api/chat/stream"].includes(path)) return "generation";
-  if (path === "/api/audio/transcribe") return "audio";
+  if (path === "/api/audio/transcribe" || path.startsWith('/api/conversation/audio/')) return "audio";
   if (path === "/api/audit/competitive-search") return "search";
   if (["/api/audit/reserve", "/api/audit/release"].includes(path)) return "audit";
   if (["/api/subscription/consume", "/api/audit/consume"].includes(path)) return "consume";
