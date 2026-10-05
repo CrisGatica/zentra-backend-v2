@@ -14582,7 +14582,13 @@ Este pedido requiere criterio, no solo ejecucion mecanica.
 	    prompt += promptBlocks.documentContextPrompt;
 
 	    // Agregar contexto de la web actual si esta disponible
-	    if (shouldUsePageContext && this.isContextLoaded && this.webContext) {
+    if (shouldUsePageContext && this.isContextLoaded && this.webContext?.conversationContext) {
+      // Schema/budget validation and user-role evidence insertion happen in release-refinements.
+      // Do not downgrade the conversation to inbox metadata or load generic/site context.
+      promptBlocks.siteContextPrompt = '\n\nConversación activa: basate en la evidencia citada de conversación, no en la bandeja de entrada.\n'
+        + JSON.stringify({ url: this.webContext.url, title: this.webContext.title });
+      prompt += promptBlocks.siteContextPrompt;
+    } else if (shouldUsePageContext && this.isContextLoaded && this.webContext) {
       const resolvedEnvironmentSummary = environmentSummary || this.getEnvironmentContextSummary(this.webContext.environmentContext);
       if (resolvedEnvironmentSummary) {
         promptBlocks.environmentPrompt = this.buildEnvironmentContextPromptBlock(resolvedEnvironmentSummary);

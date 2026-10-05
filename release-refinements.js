@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { requestFingerprint } from "./release-security.js";
 import { chatPersonalization } from "./release-entitlements.js";
+import { normalizeConversationContext, withConversationEvidence } from "./release-conversation-context.js";
 
 // This is the pinned, trusted application code, never JavaScript supplied by a request.
 const builders = new vm.Script(readFileSync(new URL("./trusted-chat-builders.js", import.meta.url), "utf8"));
@@ -15,7 +16,23 @@ const methods = Object.freeze({
   reasoning: "attemptPremiumReasoningRescue"
 });
 
+function normalizeConversationSnapshot(context) {
+  const page = context.state?.webContext;
+  if (!page || !Object.hasOwn(page, 'conversationContext')) return context;
+  const conversationContext = normalizeConversationContext(page.conversationContext);
+  if (!conversationContext) {
+    const webContext = { ...page };
+    delete webContext.conversationContext;
+    return { ...context, state: { ...context.state, webContext } };
+  }
+  const field = (value, limit) => typeof value === 'string' ? value.slice(0, limit) : '';
+  // Keep useful metadata, never the inbox/sidebar/environment or a cached unrelated site.
+  return { ...context, environmentSummary: null, state: { ...context.state, siteContext: null,
+    webContext: { url: field(page.url, 1000), domain: field(page.domain, 200), title: field(page.title, 300), conversationContext } } };
+}
+
 function createBuilder(context = {}) {
+  context = normalizeConversationSnapshot(context);
   const sandbox = vm.createContext({
     window: {}, document: { addEventListener() {}, getElementById() { return null; } },
     URL, URLSearchParams, console: { log() {}, warn() {}, error() {}, info() {} }
@@ -66,7 +83,7 @@ export async function buildAuthorizedChatRoot(body, context, user) {
   const messages = body.messages || [];
   const input = messages.filter(message => message.role === "user").at(-1)?.content;
   const text = typeof input === "string" ? input : (input || []).filter(part => part.type === "text").map(part => part.text).join("\n");
-  const snapshot = context || { version: 1, userMessage: text, state: {} };
+  const snapshot = normalizeConversationSnapshot(context || { version: 1, userMessage: text, state: {} });
   const bot = createBuilder(snapshot);
   const personalization = chatPersonalization(user, snapshot.personalization?.profile || readLegacyProfile(messages));
   bot.getPromptPersonalizationContext = async () => personalization;
@@ -99,7 +116,8 @@ export async function buildAuthorizedChatRoot(body, context, user) {
   }
   // Only trusted application builders can produce privileged provider messages.
   const effective = [{ role: "system", content: system }, ...messages.filter(message => ["user", "assistant"].includes(message.role))];
-  return { body: { ...body, messages: effective }, context: context ? { ...context, personalization } : null };
+  return { body: withConversationEvidence({ ...body, messages: effective }, bot.webContext.conversationContext),
+    context: context ? { ...snapshot, personalization } : null };
 }
 
 function recoverLegacySources(root) {
@@ -189,8 +207,8 @@ export function validateChatRoot(body, context) {
 
 export async function buildChatRefinement(stage, root, previousResponse) {
   if (stage !== "visible" && !Object.hasOwn(methods, stage)) throw new Error("Unknown refinement");
-  const context = root.context;
-  if (!context || !validateChatRoot(root.body, context)) throw new Error("Invalid original context");
+  const context = normalizeConversationSnapshot(root.context || {});
+  if (!root.context || !validateChatRoot(root.body, context)) throw new Error("Invalid original context");
   const bot = createBuilder(context);
   const requestBody = root.body;
   const userMessage = context.userMessage;
@@ -215,13 +233,13 @@ export async function buildChatRefinement(stage, root, previousResponse) {
     resolvedUserEmail: requestBody.zentra_user_email || "",
     resolvedUserId: requestBody.zentra_user_id || ""
   };
-  if (stage === "visible") return bot.buildVisibleChatRecoveryRequestBody(args);
+  if (stage === "visible") return withConversationEvidence(bot.buildVisibleChatRecoveryRequestBody(args), bot.webContext.conversationContext);
   let captured;
   const stop = new Error("Request captured");
   bot.apiProvider = { sendMessages: async request => { captured = request.body; throw stop; } };
   try { await bot[methods[stage]](args); } catch (error) { if (error !== stop) throw error; }
   if (!captured) throw new Error("Refinement not applicable");
-  return captured;
+  return withConversationEvidence(captured, bot.webContext.conversationContext);
 }
 
 export async function prepareChatStep({ client, identity, product, operationId, body }) {
