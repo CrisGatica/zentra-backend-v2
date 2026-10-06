@@ -74,9 +74,15 @@ export function createAudioTranscriber({fetchImpl,apiKey}) {
   };
 }
 
-export function createConversationAudioHandlers({client,env=process.env,transcribe,providerReady=()=>true,log=event=>console.info('[conversation-audio]',JSON.stringify(event))}) {
+export function createConversationAudioHandlers({client,env=process.env,transcribe,resolveEntitlement,providerReady=()=>true,log=event=>console.info('[conversation-audio]',JSON.stringify(event))}) {
   const emit=event=>{try{log(event);}catch(_){/* Observability must never replace a persisted transcript. */}};
-  const rpc=async(name,args)=>{const r=await client.rpc(name,args);if(r.error)throw new Error('audio_store_unavailable');return r.data;};
+  const rpc=async(name,args,req)=>{
+    if (resolveEntitlement && ['zentra_audio_prepare','zentra_audio_reserve','zentra_audio_start'].includes(name)) {
+      const entitlement=await resolveEntitlement(req.auth);
+      args={...args,p_unlimited:entitlement.unlimited===true};
+    }
+    const r=await client.rpc(name,args);if(r.error)throw new Error('audio_store_unavailable');return r.data;
+  };
   const args=(req)=>({p_auth_id:req.auth.userId,p_email:req.auth.email});
   const fail=(res,reason,status=409)=>res.status(status).json({success:false,code:reason,error:({
     audio_quota_exhausted:'Alcanzaste los minutos de transcripción disponibles para este mes.',
@@ -93,7 +99,7 @@ export function createConversationAudioHandlers({client,env=process.env,transcri
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(operation||'')) throw new Error('audio_context_invalid');
     const fingerprint=hash(JSON.stringify({context,selected}));
     const binding={platform:context.platform,contact_id:context.contact.id,message_ids:selected.map(s=>s.id)};
-    const result=await rpc('zentra_audio_prepare',{...args(req),p_operation:operation,p_hash:fingerprint,p_context:binding,p_selection:selected});
+    const result=await rpc('zentra_audio_prepare',{...args(req),p_operation:operation,p_hash:fingerprint,p_context:binding,p_selection:selected},req);
     return {result,context,selected,excluded,operation,fingerprint};
   };
   const view=(loaded)=>{
@@ -141,13 +147,13 @@ export function createConversationAudioHandlers({client,env=process.env,transcri
         // Identical bytes in one batch run only once, even with distinct message IDs.
         const unique=files.filter((f,i)=>files.findIndex(other=>other.binaryHash===f.binaryHash)===i);
         const reservation=await rpc('zentra_audio_reserve',{...args(req),p_operation:loaded.operation,p_hash:loaded.fingerprint,
-          p_items:unique.map(f=>({audio_key:f.audio_key,binary_hash:f.binaryHash,duration_ms:f.durationMs}))});
+          p_items:unique.map(f=>({audio_key:f.audio_key,binary_hash:f.binaryHash,duration_ms:f.durationMs}))},req);
         if(!reservation.allowed){if(sendFreeAccessBlock(res,reservation))return;return fail(res,reservation.reason,403);}
         reserved=true;let processed=0,ms=0,hits=initial.cacheHits;
         let current=await load(req);
         for(const file of unique){
           if(current.result.cache.some(c=>c.audio_key===file.audio_key&&c.state==='done')){hits++;continue;}
-          const start=await rpc('zentra_audio_start',{...args(req),p_operation:loaded.operation,p_key:file.audio_key});
+          const start=await rpc('zentra_audio_start',{...args(req),p_operation:loaded.operation,p_key:file.audio_key},req);
           if(!start.allowed){if(sendFreeAccessBlock(res,start))return;throw new Error(start.reason);}
           const text=await transcribe(file);processed++;ms+=file.durationMs;
           const stored=await rpc('zentra_audio_finish',{...args(req),p_operation:loaded.operation,p_key:file.audio_key,p_text:text});

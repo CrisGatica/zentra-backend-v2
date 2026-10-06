@@ -7,6 +7,7 @@ import EmbeddedPostgres,{Pool,JSDOM} from './local-postgres.mjs';
 import {createConversationAudioHandlers,inspectAudio,audioSelection,audioKey,createAudioTranscriber} from '../../release-conversation-audio.js';
 import {buildAuthorizedChatRoot} from '../../release-refinements.js';
 import {createApiSecurity} from '../../release-security.js';
+import {createConversationAudioEntitlement} from '../../release-conversation-audio-entitlement.js';
 
 const backend=new URL('../../',import.meta.url),root=process.env.ZENTRA_CHAT_ROOT;
 const env={SUPABASE_URL:'https://qfwmjgoiwketpkuhvixm.supabase.co'};
@@ -55,7 +56,8 @@ test('STAGING audio ledger: real PostgreSQL transactions, cache, action accounti
   await pg.initialise();await pg.start();db=pg.getPgClient();await db.connect();
   await db.query('create role anon;create role authenticated;create role service_role');
   for(const name of ['users','release-guard','execution-guard','http-rate','lemon','executive-refiner','premium-reasoning',
-   'search-lifecycle','executive-recovery','free-launch','conversation-audio-staging','conversation-audio-staging'])
+   'search-lifecycle','executive-recovery','free-launch','conversation-audio-staging','conversation-audio-staging',
+   'conversation-audio-entitlement-staging','conversation-audio-entitlement-staging'])
    await db.query(await readFile(new URL('supabase-'+name+'.sql',backend),'utf8'));
   pool=new Pool({host:'127.0.0.1',port:55539,user:'postgres',password:pg.options.password,max:12});
   const client={async rpc(name,args){try{const vals=Object.values(args).map(v=>v!==null&&typeof v==='object'?JSON.stringify(v):v);
@@ -165,6 +167,41 @@ test('STAGING audio ledger: real PostgreSQL transactions, cache, action accounti
    await db.query("update users set billing_cycle_start=billing_cycle_start-40::bigint*86400000 where auth_user_id='monthly'");
    const after=(await client.rpc('zentra_audio_account',{a:r.auth.userId,e:r.auth.email})).data;
    assert.notEqual(before.cycle,after.cycle);assert.equal(after.cap_ms,600000);
+  });
+  await t.test('effective STAGING Agency override: 1000min, no DB plan/Free mutation, same unlimited receipt semantics',async()=>{
+   const r=req('effective-override');await run('prepare',r);
+   await db.query('update zentra_free_launch_config set capacity_total=activated_total');
+   const before=(await db.query("select row_to_json(u) r from users u where auth_user_id=$1",[r.auth.userId])).rows;
+   const freeBefore=(await db.query('select row_to_json(c) r from zentra_free_launch_config c')).rows;
+   const resolve=createConversationAudioEntitlement({env:{...env,RENDER_EXTERNAL_HOSTNAME:'zentra-backend-v2-staging.onrender.com'},
+    isUnlimited:email=>email===r.auth.email,resolveSubscription:async()=>({plan:'agency',status:'active',unlimited_agency:true})});
+   const effective=createConversationAudioHandlers({client,env,resolveEntitlement:resolve,transcribe:async()=>{calls++;return 'fixture';},log(){}});
+   const out=response();await effective.prepare(r,out);assert.equal(out.body.quota.limitMs,60000000);
+   assert.deepEqual((await db.query("select row_to_json(u) r from users u where auth_user_id=$1",[r.auth.userId])).rows,before);
+   const processed=response();await effective.process({...r,body:{...r.body,authorized:true,audios:[{id:'one',audioBase64:wav(1.25,17)}]}},processed);
+   assert.equal(processed.statusCode,200);assert.equal(processed.body.processedMs,1250);
+   assert.equal(processed.body.quota.limitMs,60000000);assert.equal(processed.body.transcriptionAction,1);
+   assert.equal(await used(r.auth.userId),0); // Same existing unlimited-account rule as Chat; receipt records the operation.
+   assert.equal((await db.query("select funding from zentra_usage_receipts x join users u on u.id=x.user_id where u.auth_user_id=$1 and x.counter='actions_used'",[r.auth.userId])).rows[0].funding,'unlimited');
+   assert.deepEqual((await db.query('select row_to_json(c) r from zentra_free_launch_config c')).rows,freeBefore);
+   assert.equal((await db.query("select plan from users where auth_user_id=$1",[r.auth.userId])).rows[0].plan,'free');
+   assert.equal((await db.query("select count(*) n from zentra_free_access where auth_user_id=$1 and ever_used",[r.auth.userId])).rows[0].n,'0');
+   const replay=response();const providerBefore=calls;await effective.process({...r,body:{...r.body,authorized:true,audios:[]}},replay);
+   assert.equal(calls,providerBefore);assert.equal(replay.body.quota.usedMs,1250);
+   for(const signature of ['account(text,text,boolean)','prepare(text,text,text,text,jsonb,jsonb,boolean)',
+    'reserve(text,text,text,text,jsonb,boolean)','start(text,text,text,text,boolean)']){
+    assert.equal((await db.query("select has_function_privilege('authenticated',$1,'execute') v",['zentra_audio_'+signature])).rows[0].v,false);
+   }
+   await db.query('update zentra_free_launch_config set capacity_total=300');
+  });
+  await t.test('invalid/missing resource: no reserved minutes, receipt, action or provider; UI 00:00 is not duration',async()=>{
+   const r=req('invalid-resource',context([audio('one',0)]));await run('prepare',r);const before=calls;
+   assert.equal((await process(r,[])).statusCode,400);
+   assert.equal((await process(r,[{id:'one',audioBase64:Buffer.from('invalid').toString('base64')}])).body.code,'audio_invalid');
+   assert.equal(calls,before);assert.equal(await used(r.auth.userId),0);
+   assert.equal((await db.query('select count(*) n from zentra_audio_usage a join users u on u.id=a.user_id where u.auth_user_id=$1',[r.auth.userId])).rows[0].n,'0');
+   assert.equal((await db.query('select count(*) n from zentra_usage_receipts a join users u on u.id=a.user_id where u.auth_user_id=$1',[r.auth.userId])).rows[0].n,'0');
+   const valid=await process(r,[{id:'one',audioBase64:wav(1.25,19)}]);assert.equal(valid.body.processedMs,1250);assert.equal(calls,before+1);
   });
  }finally{await pool?.end();await db?.end();await pg.stop();}
 });

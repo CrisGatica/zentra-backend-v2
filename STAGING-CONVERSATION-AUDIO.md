@@ -52,12 +52,30 @@ Agency 60,000,000ms. The DB chooses plan/cycle from the verified account. Paid a
 use the existing monthly billing cycle; Free uses its monthly anchored cycle without
 resetting lifetime Free Launch counters. Downgrades/cycle changes are rechecked at start.
 
+Audio now consults the same `ensureFreshSubscriptionUsage` resolver as Chat/Advanced/
+Audit. The existing temporary unlimited-Agency override is propagated only when both
+the Supabase project and Render hostname match STAGING. It is never taken from the
+request body and never changes the stored user plan. New service-role-only RPC overloads
+carry that server decision; ordinary Free and paid rows retain their real DB entitlement.
+The override still has the Agency audio ceiling of 1000 minutes/month, not unlimited audio.
+The legacy override itself is not environment-restricted in existing Chat code; this
+change restricts its new audio use without altering that existing behavior elsewhere.
+
 The existing Chat debit remains one. An audio operation uses exactly one additional
 `actions_used` receipt, immediately at the fenced provider-start boundary, regardless
 of the number of newly transcribed audios. Prepare/confirmation/native/no-work/cache
 paths use no extra action. The server leaves room for the ordinary Chat analysis action.
 Successful transcripts transfer actual milliseconds from reserved to used. Uncertain
 provider outcomes hold minutes reserved rather than inventing successful processing.
+
+The existing unlimited-Agency exception uses `zentra_consume(..., p_unlimited=true)`:
+it records one processing receipt with unlimited funding rather than incrementing
+`actions_used`. Audio reuses that existing rule, instead of creating a different billing
+interpretation. Ordinary Free/paid processing still debits one action per new operation.
+
+Transport waits at most 20 read-only DOM snapshots (100ms apart) for a naturally lazy
+resource. It never clicks Play or treats visible `00:00` as an authoritative duration.
+Missing or invalid bytes fail before minute reservations or processing receipts.
 
 ## Persistence / idempotency
 
