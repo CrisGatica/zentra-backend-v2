@@ -1014,10 +1014,14 @@ class ClaudeChatbot {
   }
 
   normalizeDetectedUrl(url = '') {
-    return String(url || '')
+    let value = String(url || '')
       .trim()
-      .replace(/[)>.,;:'"]+$/g, '')
+      .replace(/[>.,;:'"]+$/g, '')
       .trim();
+    while (value.endsWith(')') && (value.match(/\)/g) || []).length > (value.match(/\(/g) || []).length) {
+      value = value.slice(0, -1);
+    }
+    return value;
   }
 
   isPastedUrlTaskInstructionLine(line = '') {
@@ -1097,7 +1101,8 @@ class ClaudeChatbot {
       if (!line) return;
       const nextLine = String(lines[index + 1] || '').trim();
 
-      const urlMatch = line.match(/https?:\/\/[^\s<>"']+/i);
+      const markdownUrl = line.match(/\\?\]\s*\\?\((https?:\/\/(?:[^\s<>"'()\\]|\([^()\s]*\))+?)\\?\)/i);
+      const urlMatch = markdownUrl ? [markdownUrl[1]] : line.match(/https?:\/\/[^\s<>"']+/i);
       if (urlMatch?.[0]) {
         const previousLine = String(lines[index - 1] || '').trim();
         currentEntry = {
@@ -1261,6 +1266,13 @@ class ClaudeChatbot {
   resolvePastedUrlTaskForMessage(message = '') {
     const text = String(message || '').trim();
     if (!text) return null;
+
+    // URLs are evidence, not a new task. Existing explicit intents take priority
+    // before either current-input URL cleanup or inheritance from an older turn.
+    const instruction = this.getIntentInstructionText(text);
+    if (this.isExplicitCaseResolutionRequest(instruction)
+      || this.isReadyToSendMessageRequest(instruction)
+      || this.isSeniorIntentGate(instruction)) return null;
 
     const directEntries = this.extractPastedUrlTaskEntries(text);
     if (directEntries.length >= 2) {
@@ -1694,6 +1706,13 @@ class ClaudeChatbot {
     return { contextDecision: 'page', outputType: 'diagnostic', renderType: 'cards' };
   }
 
+  isReadyToSendMessageRequest(message = '') {
+    const instruction = this.getIntentInstructionText(message);
+    return /(?:dame|necesito|quiero|redact[aá]|escrib[iíe]|arm[aá](?:me)?|prepar[aá](?:me)?|cre[aá](?:me)?).{0,80}\b(?:mensaje|respuesta|correo|email)\b/i.test(instruction)
+      && /\b(?:mensaje|respuesta|correo|email)\b.{0,100}(?:\b(?:enviar|mandar)(?:le|lo|la)?\b|\bpara\s+(?:el\s+|la\s+)?client[ea]\b|\bpara\s+whats?app\b)/i.test(instruction)
+      && !/\b(?:varios|varias|dos|tres|\d+)\s+(?:mensajes|respuestas|versiones|alternativas)\b/i.test(instruction);
+  }
+
   detectResponseContract({
     userMessage = '',
     imageData = null,
@@ -1742,10 +1761,11 @@ class ClaudeChatbot {
     const asksCopy = /(titular|titulo|título|title\b|meta\s*descrip|meta\s*description|descripcion|descripción|\bctas?\b|copy\b|headline|h1\b|h2\b|anuncio|ads\b|caption|bio\b|landing|guion|guión|texto comercial|promocion|promoción)/i.test(normalized);
     const asksManyVariants = /(\b\d+\b|diez|10|varias|varios|opciones|alternativas|versiones|variantes|ideas)/i.test(normalized);
     const asksPriority = /(que har[ií]a primero|qué har[ií]a primero|que hago primero|qué hago primero|prioridad|prioriz|primero|orden de accion|orden de acción|cuello de botella)/i.test(normalized);
-    const asksPlan = /(plan\b|paso a paso|roadmap|hoja de ruta|secuencia|implementarlo|implementacion|implementación)/i.test(normalized);
+    const asksPlan = /(plan\b|paso a paso|roadmap|hoja de ruta|secuencia|implementarlo|implementacion|implementación|tareas\s+(?:debo|tengo\s+que)\s+(?:realizar|hacer))/i.test(normalized);
     const asksDirectGuide = this.isGuideStyleRequest(instructionText, interactionMeta);
     const asksSummary = /(resumi|resum[ií]|resumen|sintetiza|síntesis|sintesis|consolida|junta todo|todo lo que vimos)/i.test(normalized);
     const asksResponse = /(respuesta lista|respuesta para|responder|respond[eé]|mensaje para|email|correo|whatsapp|ticket|caso|resolucion|resolución|cierre del caso|nota de cierre)/i.test(normalized);
+    const asksReadyMessage = this.isReadyToSendMessageRequest(instructionText);
     const asksChecklist = /(checklist|lista verificable|verificar|revisar punto por punto)/i.test(normalized);
     const asksTable = /(tabla|cuadro comparativo|comparativa en tabla)/i.test(normalized);
     const asksCards = /(?:\ben\s+cards?\b|\bcomo\s+cards?\b|\ben\s+tarjetas?\b|\bcomo\s+tarjetas?\b)/i.test(normalized);
@@ -1941,6 +1961,8 @@ class ClaudeChatbot {
       outputType = 'response';
     } else if (strategicAnalysisRequest || internalProcessAnalysisRequest) {
       outputType = 'diagnostic';
+    } else if (asksReadyMessage) {
+      outputType = 'response';
     } else if (asksDirectGuide) {
       outputType = 'plan';
     } else if (asksResponse) {
@@ -1992,13 +2014,15 @@ class ClaudeChatbot {
     } else if (outputType === 'diagnostic' || outputType === 'optimization') {
       renderType = (asksStructuredAnalysis || asksIssueCards) ? 'cards' : 'narrative';
     } else if (outputType === 'response' || outputType === 'summary') {
-      renderType = 'narrative';
+      renderType = asksReadyMessage ? 'plain' : 'narrative';
     }
 
     if (pastedUrlTask) {
       renderType = asksLinksOnly ? 'plain' : 'list';
     } else if (asksCards) {
       renderType = 'cards';
+    } else if (asksReadyMessage && asksTable) {
+      renderType = 'table';
     } else if (strategicAnalysisRequest) {
       renderType = 'cards';
     }
@@ -2215,6 +2239,14 @@ class ClaudeChatbot {
     };
 
     const specificRules = [];
+
+    if (contract.outputType === 'response' && contract.renderType === 'plain'
+      && this.isReadyToSendMessageRequest(instructionText)) {
+      specificRules.push(`COMUNICACION LISTA PARA ENVIAR
+- Devuelve una sola comunicacion lista para copiar y enviar al destinatario, con parrafos naturales si hace falta.
+- No agregues encabezados, tarjetas de diagnostico, analisis previo ni un proximo paso separado del mensaje.
+- Conserva los datos relevantes y las confirmaciones pendientes de la conversacion; no inventes acuerdos ni cambios realizados.`);
+    }
 
     if (instructionText !== String(userMessage || '').trim()) {
       specificRules.push(`MATERIAL DE REFERENCIA DEL PEDIDO
@@ -4493,10 +4525,11 @@ Elegí hasta 7 encabezados principales según el contenido, por ejemplo: Product
       return true;
     }
 
-    const technologyCue = /\b(?:modelo|ia|inteligencia artificial|api|gpt|openai|claude|gemini|proveedor|provider|motor)\b/i.test(normalized);
+    const technologyCue = /\b(?:modelo|ia|inteligencia artificial|api|gpt|openai|claude|gemini|proveedor|provider|motor|tecnologia)\b/i.test(normalized);
     const directQuestionCue = /[¿?]/.test(text)
       || /^(?:que|cual|usas|usan|utilizas|utilizan|hay|sos|eres|estas\s+usando|decime|dime|contame|cuentame)\b/i.test(normalized);
-    return technologyCue && directQuestionCue;
+    const assistantSubject = /\b(?:usa|utiliza|emplea)\s+zentra\b|\b(?:de|detras de)\s+zentra\b|\bzentra\s+(?:usa|utiliza|emplea)\b/i.test(normalized);
+    return technologyCue && directQuestionCue && assistantSubject;
   }
 
   isTechnicalSystemMessage(message = '') {
@@ -10748,7 +10781,7 @@ REESCRITURAS CORTAS
   }
 
   resolveAssistantTextFromData(data, {
-    userMessage = '',
+    userMessage = this.lastPromptBuildMeta?.userMessage || '',
     taskIntent = null,
     applyWeakRewriteFallback = true
   } = {}) {
@@ -10775,7 +10808,7 @@ REESCRITURAS CORTAS
       ];
       payload = candidates.find((candidate) => (
         !this.isEmptyAssistantResponseValue(candidate)
-        && Boolean(this.extractAssistantText(candidate))
+        && Boolean(this.extractAssistantText(candidate, { userMessage }))
       )) ?? null;
     } else {
       const candidates = [
@@ -10788,7 +10821,7 @@ REESCRITURAS CORTAS
       ];
       payload = candidates.find((candidate) => (
         !this.isEmptyAssistantResponseValue(candidate)
-        && Boolean(this.extractAssistantText(candidate))
+        && Boolean(this.extractAssistantText(candidate, { userMessage }))
       )) ?? null;
     }
 
@@ -10796,7 +10829,7 @@ REESCRITURAS CORTAS
       throw new Error(data.error || 'Respuesta invalida del servidor');
     }
 
-    const assistantTextRaw = this.extractAssistantText(payload);
+    const assistantTextRaw = this.extractAssistantText(payload, { userMessage });
     const shouldForcePlainRewrite = taskIntent?.label === 'simple_rewrite' || this.isSimpleSeoRewriteRequest(userMessage);
     const assistantTextBase = shouldForcePlainRewrite
       ? this.forcePlainRewriteAssistantText(assistantTextRaw)
@@ -10804,7 +10837,7 @@ REESCRITURAS CORTAS
     const assistantText = taskIntent?.metaDescriptionRewrite
       ? this.enforceMetaDescriptionLength(assistantTextBase)
       : assistantTextBase;
-    let finalAssistantText = this.applyTaskMemoryResponseGuards(this.normalizeFinalAssistantOutput(assistantText), {
+    let finalAssistantText = this.applyTaskMemoryResponseGuards(this.normalizeFinalAssistantOutput(assistantText, { userMessage }), {
       userMessage,
       taskIntent
     });
@@ -12784,15 +12817,15 @@ Devolvé únicamente el campo response.`
     };
   }
 
-  extractAssistantText(payload) {
+  extractAssistantText(payload, options = {}) {
     if (payload == null) return '';
 
     if (typeof payload === 'object') {
       const rescuedText = this.salvageVisibleAssistantText(payload);
       if (rescuedText) {
-        return this.normalizeFinalAssistantOutput(rescuedText);
+        return this.normalizeFinalAssistantOutput(rescuedText, options);
       }
-      return this.normalizeFinalAssistantOutput(this.extractTextFromObject(payload));
+      return this.normalizeFinalAssistantOutput(this.extractTextFromObject(payload), options);
     }
 
     const text = String(payload).trim();
@@ -12800,20 +12833,20 @@ Devolvé únicamente el campo response.`
 
     const rescuedText = this.salvageVisibleAssistantText(text);
     if (rescuedText) {
-      return this.normalizeFinalAssistantOutput(rescuedText);
+      return this.normalizeFinalAssistantOutput(rescuedText, options);
     }
 
     const extractedFromJsonLike = this.extractPreferredAssistantValueFromJsonLikeText(text);
     if (extractedFromJsonLike) {
-      return this.normalizeFinalAssistantOutput(extractedFromJsonLike);
+      return this.normalizeFinalAssistantOutput(extractedFromJsonLike, options);
     }
 
     const structuredPayload = this.extractStructuredPayloadFromText(text);
     if (structuredPayload) {
-      return this.normalizeFinalAssistantOutput(this.extractTextFromObject(structuredPayload));
+      return this.normalizeFinalAssistantOutput(this.extractTextFromObject(structuredPayload), options);
     }
 
-    return this.normalizeFinalAssistantOutput(text);
+    return this.normalizeFinalAssistantOutput(text, options);
   }
 
   getAssistantTextPreferredKeys() {
@@ -13254,9 +13287,9 @@ Devolvé únicamente el campo response.`
     return cleaned;
   }
 
-  normalizeFinalAssistantOutput(text = '') {
+  normalizeFinalAssistantOutput(text = '', { userMessage = this.lastPromptBuildMeta?.userMessage || '' } = {}) {
     const raw = String(text || '').trim();
-    const lastUserMessage = String(this.lastPromptBuildMeta?.userMessage || '').trim();
+    const lastUserMessage = String(userMessage || '').trim();
     const structuredTaskOrganization = this.getStructuredTaskOrganizationSpec(lastUserMessage);
     const pastedUrlTask = structuredTaskOrganization
       ? null
@@ -13267,7 +13300,8 @@ Devolvé únicamente el campo response.`
     const ocrTurn = this.isImageTextExtractionTurn(lastUserMessage);
     const rewriteFallback = rewriteTurn ? this.buildSimpleRewriteLocalFallback(lastUserMessage, raw) : '';
     const safeGuideFallback = this.buildSafeAccountAccessGuideFallback(lastUserMessage);
-    if (identityDisclosureTurn) {
+    if (identityDisclosureTurn && raw && !this.isEmptyAssistantResponseValue(raw)
+      && !this.isTechnicalSystemMessage(raw) && !this.looksLikeInternalAssistantPayload(raw)) {
       return this.getPublicAssistantIdentityReply();
     }
 
@@ -13302,14 +13336,14 @@ Devolvé únicamente el campo response.`
         ? this.formatStructuredGuideData(publicStructuredPayload)
         : this.formatStructuredData(publicStructuredPayload);
       if (formattedStructuredOutput) {
-        return this.sanitizePublicAssistantOutput(formattedStructuredOutput);
+        return this.sanitizePublicAssistantOutput(formattedStructuredOutput, { userMessage: lastUserMessage });
       }
     }
 
     if (!explicitJsonOutput && !publicStructuredPayload && this.looksLikeUnrequestedStructuredOutput(raw)) {
       const recoveredStructuredOutput = this.recoverReadableStructuredOutput(raw);
       if (recoveredStructuredOutput) {
-        return this.sanitizePublicAssistantOutput(recoveredStructuredOutput);
+        return this.sanitizePublicAssistantOutput(recoveredStructuredOutput, { userMessage: lastUserMessage });
       }
     }
 
@@ -13420,7 +13454,7 @@ Devolvé únicamente el campo response.`
       cleaned = this.forcePlainRewriteAssistantText(cleaned);
     }
 
-    cleaned = this.sanitizePublicAssistantOutput(cleaned);
+    cleaned = this.sanitizePublicAssistantOutput(cleaned, { userMessage: lastUserMessage });
     if (ocrTurn) {
       cleaned = this.normalizeRecoveredOcrText(cleaned);
       if (!this.isRecoverableOcrText(cleaned)) return '';
@@ -13809,14 +13843,15 @@ REGLAS:
     return this.normalizeVisibleSpanishText(this.normalizeJsonLikeAssistantText(cleaned));
   }
 
-  sanitizePublicAssistantOutput(text = '') {
+  sanitizePublicAssistantOutput(text = '', { userMessage = this.lastPromptBuildMeta?.userMessage || '' } = {}) {
     const raw = String(text || '').trim();
     if (!raw) return '';
 
-    const lastUserMessage = String(this.lastPromptBuildMeta?.userMessage || '').trim();
+    const lastUserMessage = String(userMessage || '').trim();
     const rewriteTurn = this.isVisibleTextRewriteTurn(lastUserMessage);
     const rewriteFallback = rewriteTurn ? this.buildSimpleRewriteLocalFallback(lastUserMessage, raw) : '';
-    if (this.isModelDisclosureRequest(lastUserMessage)) {
+    if (this.isModelDisclosureRequest(lastUserMessage)
+      && !this.isTechnicalSystemMessage(raw) && !this.looksLikeInternalAssistantPayload(raw)) {
       return this.getPublicAssistantIdentityReply();
     }
 
@@ -15672,15 +15707,17 @@ Este pedido requiere criterio, no solo ejecucion mecanica.
   
   formatInlineText(text) {
     if (!text) return '';
-    const formatted = this.escapeHtml(String(text))
+    const inline = (value) => this.escapeHtml(String(value))
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.*?)\*/g, '<em>$1</em>')
-      .replace(/`(.*?)`/g, '<code>$1</code>')
+      .replace(/`(.*?)`/g, '<code>$1</code>');
+    const autoLink = (value) => inline(value)
       .replace(/\bhttps?:\/\/[^\s<>"']+/gi, (match) => {
         let url = match;
         let trailing = '';
 
         while (/[.,;:!?)]$/.test(url)) {
+          if (url.endsWith(')') && (url.match(/\)/g) || []).length <= (url.match(/\(/g) || []).length) break;
           trailing = url.slice(-1) + trailing;
           url = url.slice(0, -1);
         }
@@ -15688,6 +15725,20 @@ Este pedido requiere criterio, no solo ejecucion mecanica.
         return `<a href="${url}" class="chat-link" target="_blank" rel="noopener noreferrer">${url}</a>${trailing}`;
       });
 
+    // Resolve supported Markdown before autolinking. Never autolink a label or
+    // already-rendered anchor, which would put Markdown/HTML inside its href.
+    const source = String(text)
+      .replace(/\\\[([^\[\]\n]+)\\\]\\\((https?:\/\/[^\s<>"'\\]+)\\\)/gi, '[$1]($2)')
+      .replace(/\[([^\[\]\n]*)\[([^\]\n]*)\]\((https?:\/\/[^\s<>"']+?)\)\]\((https?:\/\/[^\s<>"']+?)\)/gi,
+        (_match, outer, label, _innerUrl, url) => `[${outer}${label}](${url})`);
+    const pattern = /\[([^\[\]\n]*)\]\((https?:\/\/(?:[^\s<>"'()]|\([^()\s]*\))+?)\)/gi;
+    let formatted = '', offset = 0, match;
+    while ((match = pattern.exec(source)) !== null) {
+      formatted += autoLink(source.slice(offset, match.index));
+      formatted += `<a href="${this.escapeHtml(match[2])}" class="chat-link" target="_blank" rel="noopener noreferrer">${inline(match[1] || match[2])}</a>`;
+      offset = pattern.lastIndex;
+    }
+    formatted += autoLink(source.slice(offset));
     return formatted.replace(/\n/g, '<br>');
   }
 
