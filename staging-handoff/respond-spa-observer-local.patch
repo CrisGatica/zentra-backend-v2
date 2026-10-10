@@ -1,0 +1,10 @@
+--- a/conversation-context.js
++++ b/conversation-context.js
+@@ -3 +3 @@
+-    const runtimeVersion = 'respond-context-v6-observed-history';
++    const runtimeVersion = 'respond-context-v7-spa-observed-history';
+@@ -211 +211,3 @@
+-  if (window.ZentraConversationContext.supports(window.location?.href) && typeof chrome !== 'undefined' && chrome.storage?.local?.get) {
++  // Start on the Respond host even when initially in the inbox: SPA navigation
++  // does not reload content scripts. read() still validates the active route.
++  if (/^https:\/\/app\.respond\.io(?:\/|$)/.test(window.location?.href || '') && typeof chrome !== 'undefined' && chrome.storage?.local?.get) {

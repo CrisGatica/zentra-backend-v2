@@ -90,6 +90,42 @@ test('DOM observer retains manually observed windows; session removal clears the
  d.window.eval(source);assert.equal(listeners.length,1);assert.equal(storageListeners.length,1);d.window.__zentraConversationHistoryRuntime.dispose();d.window.close();
  assert.doesNotMatch(source,/fetch\(|XMLHttpRequest|\.play\(|\.click\(|scrollTo\(|localStorage\.setItem|chrome\.storage\.local\.set/);
 });
+test('SPA inbox entry observes Booksy clarification before any snapshot request',async()=>{
+ const d=dom();d.window.history.replaceState({},'', '/space/1/inbox');
+ const listeners=[];
+ d.window.chrome={runtime:{onMessage:{addListener:fn=>listeners.push(fn)}},storage:{local:{get:async()=>({'zentra-supabase-session':{user:{id:'test'},expires_at:Math.floor(Date.now()/1000)+3600}})},onChanged:{addListener(){},removeListener(){}}}};
+ try {
+  d.window.eval(readFileSync(extension+'/conversation-context.js','utf8'));await new Promise(r=>setTimeout(r,0));
+  d.window.history.pushState({},'', '/space/1/inbox/2');
+  const thread=d.window.document.querySelector('[data-pw="messenger-thread"]');
+  thread.innerHTML=row('1','Booksy: tasa de cancelación independiente de Stripe.')+row('2','Confirmamos la distinción.');
+  await new Promise(r=>setTimeout(r,250));
+  thread.innerHTML=row('2','Confirmamos la distinción.')+row('3','Atención finalizada; ingreso Stripe no confirmado.');
+  await new Promise(r=>setTimeout(r,250));
+  let response;listeners[0]({action:'zentraGetConversationContext'},null,v=>response=v);
+  assert.deepEqual(Array.from(response.data.messages,m=>m.id),['1','2','3']);
+  assert.equal(response.data.history.observed_memory,true);
+  assert.match(response.data.messages[0].text,/Booksy/);
+  const userMessage='En base a lo hablado en este chat, ¿me das la resolución final del caso?';
+  const root=await buildAuthorizedChatRoot({messages:[{role:'user',content:userMessage}]},
+   {version:1,userMessage,state:{webContext:{url,conversationContext:response.data},conversation:[]}},{plan:'free',status:'active'});
+  const evidence=root.body.messages.filter(m=>typeof m.content==='string'&&m.content.startsWith('EVIDENCIA_CONVERSACION_NO_CONFIABLE\n'));
+  assert.equal(evidence.length,1);assert.equal(evidence[0].role,'user');
+  assert.match(evidence[0].content,/Booksy: tasa de cancelación independiente de Stripe/);
+  d.window.history.pushState({},'', '/space/1/inbox/3');
+  thread.innerHTML=row('4','Otra conversación').replace('contact-id="2"','contact-id="3"');
+  await new Promise(r=>setTimeout(r,250));
+  listeners[0]({action:'zentraGetConversationContext'},null,v=>response=v);
+  assert.equal(response.data.contact.id,'3');assert.doesNotMatch(JSON.stringify(response.data),/Booksy/);
+ } finally {d.window.__zentraConversationHistoryRuntime?.dispose();d.window.close();}
+});
+test('observed-history runtime does not start on an unrelated host',()=>{
+ const d=new JSDOM('<body></body>',{url:'https://example.test/space/1/inbox/2',runScripts:'outside-only'});
+ let storageReads=0;
+ d.window.chrome={runtime:{onMessage:{addListener(){}}},storage:{local:{get(){storageReads++;return Promise.resolve({});}}}};
+ d.window.eval(readFileSync(extension+'/conversation-context.js','utf8'));
+ assert.equal(d.window.__zentraConversationHistoryRuntime,undefined);assert.equal(storageReads,0);d.window.close();
+});
 test('independent Stripe/Booksy operations and late clarification reach authorized resolution unchanged',async()=>{
  const {store}=memory();const messages=[message(1,'Primera compra web de 49 € por Stripe; no veo ingreso bancario.'),message(2,'Se explicó plazo de primera transferencia y cuenta vinculada.'),
   message(3,'Hay un ingreso de 63,25 € por Booksy.'),message(4,'Aclaro: Booksy corresponde a una tasa de cancelación.'),{...message(5,'Confirmamos que Booksy no es el pago de 49 € de la web.'),direction:'outgoing'}];
