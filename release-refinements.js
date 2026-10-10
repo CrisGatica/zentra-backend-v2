@@ -3,6 +3,7 @@ import vm from "node:vm";
 import { requestFingerprint } from "./release-security.js";
 import { chatPersonalization } from "./release-entitlements.js";
 import { normalizeConversationContext, withConversationEvidence, withChatContinuity } from "./release-conversation-context.js";
+import { normalizeTicketContext, withTicketEvidence } from "./release-ticket-context.js";
 
 // This is the pinned, trusted application code, never JavaScript supplied by a request.
 const builders = new vm.Script(readFileSync(new URL("./trusted-chat-builders.js", import.meta.url), "utf8"));
@@ -17,6 +18,12 @@ const methods = Object.freeze({
 });
 
 function normalizeConversationSnapshot(context) {
+  const ticketPage = context.state?.webContext;
+  const ticket = normalizeTicketContext(ticketPage?.ticketContext, ticketPage?.url);
+  if (ticket) {
+    context = {...context, environmentSummary:null, state:{...context.state,siteContext:null,
+      webContext:{url:ticketPage.url,domain:'desk.zoho.eu',title:String(ticketPage.title || '').slice(0,300),ticketContext:ticket}}};
+  }
   const page = context.state?.webContext;
   if (!page || !Object.hasOwn(page, 'conversationContext')) return context;
   const conversationContext = normalizeConversationContext(page.conversationContext);
@@ -116,7 +123,7 @@ export async function buildAuthorizedChatRoot(body, context, user) {
   }
   // Only trusted application builders can produce privileged provider messages.
   const effective = [{ role: "system", content: system }, ...messages.filter(message => ["user", "assistant"].includes(message.role))];
-  return { body: withChatContinuity(withConversationEvidence({ ...body, messages: effective }, bot.webContext.conversationContext), snapshot),
+  return { body: withChatContinuity(withTicketEvidence(withConversationEvidence({ ...body, messages: effective }, bot.webContext.conversationContext), bot.webContext), snapshot),
     context: context ? { ...snapshot, personalization } : null };
 }
 
@@ -233,13 +240,13 @@ export async function buildChatRefinement(stage, root, previousResponse) {
     resolvedUserEmail: requestBody.zentra_user_email || "",
     resolvedUserId: requestBody.zentra_user_id || ""
   };
-  if (stage === "visible") return withChatContinuity(withConversationEvidence(bot.buildVisibleChatRecoveryRequestBody(args), bot.webContext.conversationContext), context);
+  if (stage === "visible") return withChatContinuity(withTicketEvidence(withConversationEvidence(bot.buildVisibleChatRecoveryRequestBody(args), bot.webContext.conversationContext), bot.webContext), context);
   let captured;
   const stop = new Error("Request captured");
   bot.apiProvider = { sendMessages: async request => { captured = request.body; throw stop; } };
   try { await bot[methods[stage]](args); } catch (error) { if (error !== stop) throw error; }
   if (!captured) throw new Error("Refinement not applicable");
-  return withChatContinuity(withConversationEvidence(captured, bot.webContext.conversationContext), context);
+  return withChatContinuity(withTicketEvidence(withConversationEvidence(captured, bot.webContext.conversationContext), bot.webContext), context);
 }
 
 export async function prepareChatStep({ client, identity, product, operationId, body }) {
