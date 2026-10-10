@@ -16,6 +16,11 @@ bot.debugLog=()=>{};
 const publicContext=vm.createContext({window:{},document:{addEventListener(){}},console,URL,URLSearchParams});
 vm.runInContext(await readFile(clean+'/claude-chatbot.js','utf8'),publicContext);
 const updated=publicContext.window.ClaudeChatbot.prototype;
+// Only case resolution was intentionally changed in STAGING. Keep production
+// parity checks for every other validated builder without changing clean files.
+const stagingContext=vm.createContext({window:{},document:{addEventListener(){}},console,URL,URLSearchParams});
+vm.runInContext(await readFile((process.env.ZENTRA_CHAT_ROOT || base+'/STAGING/ZENTRA_AI_CHROME_LAB_STAGING')+'/claude-chatbot.js','utf8'),stagingContext);
+const stagingUpdated=stagingContext.window.ClaudeChatbot.prototype;
 const repairMethods=['attemptSimpleRewriteRetry','attemptStructuredTaskOrganizationRecovery','attemptImageOcrCardsRecovery',
   'attemptIncompleteVisibleResponseRecovery','attemptStructuredStrategicRecovery','attemptSeniorResponsePolish','attemptPremiumReasoningRescue'];
 function withoutStage(source) {
@@ -25,9 +30,9 @@ function withoutStage(source) {
 for(const name of repairMethods) assert.equal(withoutStage(updated[name].toString()),bot[name].toString(),name);
 for(const name of ['buildPlainTextRewriteRetryRequestBody','buildVisibleChatRecoveryRequestBody','buildPlainTextRewriteRequestBody',
   'buildCaseResolutionRequestBody','buildPlainImageOcrRequestBody','buildImagePromotionCopyRequestBody','buildStrategicRecoveryRequestSpec']) {
-  assert.equal(updated[name].toString(),bot[name].toString(),name);
+  assert.equal((name==='buildCaseResolutionRequestBody' ? stagingUpdated : updated)[name].toString(),bot[name].toString(),name);
 }
-console.log('PASS trusted builders retain exact validated prompts; client adds only stage metadata');
+console.log('PASS trusted builders retain validated prompts; STAGING resolution matches STAGING client');
 
 const snapshot=userMessage=>({version:1,userMessage,taskIntent:{label:'simple_rewrite'},
   responseContract:{outputType:'response',renderType:'plain',contextDecision:'free'},

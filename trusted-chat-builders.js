@@ -3705,7 +3705,10 @@ Redacta una resolucion interna de soporte completa, profesional y lista para peg
 REGLAS
 - Reconstruye la cronologia y usa las actualizaciones mas recientes como estado final.
 - Explica con claridad que se reviso, que se hizo, cual fue el resultado y que queda pendiente.
-- No declares el caso resuelto o cerrado si todavia depende de una accion o confirmacion del cliente.
+- Distingue el cierre de la atencion de soporte del resultado de una operacion externa. support.status describe solo la conversacion: cerrada no confirma una acreditacion, entrega ni ejecucion. Si es unknown, no inventes que esta abierta o cerrada ni deduzcas su estado actual de un cierre historico.
+- Conserva las aclaraciones y correcciones posteriores. Operaciones con distinto origen, importe o concepto son independientes salvo vinculo explicito; no relaciones sus plazos por suposicion.
+- Distingue solicitudes, propuestas, trabajos confirmados y pendientes reales. No declares acreditaciones, entregas u otros resultados externos sin confirmacion; un resultado pendiente no implica que la atencion siga abierta.
+- El historial loaded_only/incomplete es parcial, incluso si conserva mensajes observados anteriormente. No afirmes haber revisado la conversacion completa; indica brevemente la limitacion cuando afecte la resolucion.
 - Si hay datos contradictorios, prioriza el mensaje mas reciente y no inventes el dato correcto.
 - Conserva exactamente los nombres, correos, dominios, URLs y referencias relevantes que aparezcan completos.
 - Distingue correos de URLs: un correo completo contiene usuario, arroba y dominio; nunca presentes una URL o referencia truncada con puntos suspensivos como correo o cuenta confirmada.

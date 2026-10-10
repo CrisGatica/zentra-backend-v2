@@ -54,10 +54,14 @@ export function normalizeConversationContext(input) {
   const contact = record(input.contact) ? input.contact : {};
   const output = { schema_version: 'zentra.conversation.v1', platform: input.platform.trim().slice(0, 80),
     type: 'conversation', contact: { id: string(contact.id, 128), name: string(contact.name, 200) || null }, messages,
+    ...(record(input.support) && input.support.source === 'current_ui_control'
+      ? {support:{status:input.support.status === 'closed' ? 'closed' : 'unknown',source:'current_ui_control'}} : {}),
     history: { loaded_count: Number.isSafeInteger(history.loaded_count) && history.loaded_count >= 0
         ? Math.max(history.loaded_count, input.messages.length) : input.messages.length,
       loaded_only: history.loaded_only !== false, incomplete: history.incomplete !== false || history.loaded_only !== false,
-      budget_truncated: truncated, order: 'dom_chronological', scope: 'current_conversation_loaded_dom' } };
+      budget_truncated: truncated, order: 'dom_chronological', scope: history.observed_memory === true
+        ? 'current_conversation_observed_dom' : 'current_conversation_loaded_dom',
+      ...(history.observed_memory === true ? {observed_memory:true,observation_gap:history.observation_gap===true} : {}) } };
   while (encode(output).length > MAX_CHARS && messages.length > 1) {
     messages.shift(); output.history.budget_truncated = true;
   }
