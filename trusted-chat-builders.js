@@ -7286,171 +7286,134 @@ ${sections.join('\n\n---\n\n')}`;
   }
 
   detectContextualSurface(environmentSummary = null) {
-    const platform = environmentSummary?.platform || '';
-    const section = environmentSummary?.section || '';
-    const url = String(this.webContext?.url || '').toLowerCase();
-    const title = String(this.webContext?.title || '').toLowerCase();
-    const haystack = `${url} ${title}`;
+    const generic = { key: 'web_general', baseKey: 'web_general', section: 'generic' };
+    let page;
+    try { page = new URL(String(this.webContext?.url || '')); } catch (_) { return generic; }
+    if (!/^https?:$/.test(page.protocol)) return generic;
 
-    const hasHint = (...patterns) => patterns.some((pattern) => pattern.test(haystack));
+    // Membership is proved by the real host, never a URL embedded in a query/title.
+    const host = page.hostname.toLowerCase().replace(/\.$/, '');
+    const path = page.pathname.toLowerCase();
+    const isHost = (...domains) => domains.some((domain) => host === domain || host.endsWith('.' + domain));
+    const segments = path.split('/').filter(Boolean);
+    // A verified app's hash router is a path, not an arbitrary hash/query hint.
+    const route = path + (page.hash.startsWith('#/') ? '/' + page.hash.slice(2).split('?')[0].toLowerCase() : '');
+    const hasSegment = (...names) => route.split('/').some((part) => names.includes(part));
+    const surface = (key, baseKey = key, section = key) => ({ key, baseKey, section });
+    const isAuth = hasSegment('login', 'signin', 'sign-in', 'signup', 'sign-up', 'auth', 'oauth', 'login.php', 'wp-login.php');
+    if (isAuth) return generic;
 
-    if (platform === 'google_ads') {
-      if (section === 'dashboard' || hasHint(/\bdashboard\b/i, /\boverview\b/i, /\bresumen\b/i)) {
-        return { key: 'google_ads_dashboard', baseKey: 'google_ads', section: 'dashboard' };
+    if (isHost('ads.google.com')) {
+      if (hasSegment('overview', 'dashboard')) return surface('google_ads_dashboard', 'google_ads', 'dashboard');
+      return surface('google_ads', 'google_ads', 'campaigns');
+    }
+    if ((isHost('search.google.com') && segments[0] === 'search-console') || isHost('searchconsole.google.com')) {
+      return surface('search_console', 'search_console', environmentSummary?.section || 'performance');
+    }
+    if (isHost('analytics.google.com')) return surface('google_analytics', 'web_general', 'analytics');
+
+    if (isHost('business.facebook.com', 'adsmanager.facebook.com')) {
+      if (hasSegment('billing', 'payments', 'payment', 'facturacion', 'settings')) return generic;
+      if (hasSegment('results', 'performance', 'report', 'reports', 'insights', 'overview', 'dashboard')) {
+        return surface('meta_ads_results', 'meta_ads', 'results');
       }
-      return { key: 'google_ads', baseKey: 'google_ads', section };
+      return surface('meta_ads', 'meta_ads', 'campaigns');
     }
-    if (platform === 'search_console') return { key: 'search_console', section };
-
-    if (url.includes('ads.google.com')) {
-      if (hasHint(/\/overview/i, /\bdashboard\b/i, /\boverview\b/i, /\bresumen\b/i)) {
-        return { key: 'google_ads_dashboard', baseKey: 'google_ads', section: 'dashboard' };
+    if (isHost('ads.tiktok.com') || (isHost('business.tiktok.com') && segments[0] === 'ads')) {
+      return surface('tiktok_ads', 'tiktok_ads', 'campaigns');
+    }
+    if (isHost('linkedin.com') && ['campaignmanager', 'ad', 'ads'].includes(segments[0])) {
+      return surface('linkedin_ads', 'linkedin_ads', 'campaigns');
+    }
+    if (isHost('studio.youtube.com')) {
+      // Explicit routes win over title/CTR and any historical environment summary.
+      if (hasSegment('promotion', 'promotions', 'ads')) return surface('youtube_promotions', 'youtube_promotions', 'promotions');
+      if (hasSegment('analytics')) return surface('youtube_analytics', 'youtube_channel', 'analytics');
+      if (segments[0] === 'channel') return surface('youtube_channel', 'youtube_channel', 'studio');
+      return generic;
+    }
+    if (isHost('youtube.com')) {
+      if ((path === '/watch' && String(page.searchParams.get('v') || '').trim()) || (segments[0] === 'shorts' && segments[1])) {
+        return surface('youtube_video', 'youtube_video', 'video');
       }
-      return { key: 'google_ads', baseKey: 'google_ads', section: 'campaigns' };
-    }
-
-    if (url.includes('search.google.com/search-console')) {
-      return { key: 'search_console', section: 'performance' };
-    }
-
-    if (
-      url.includes('analytics.google.com') ||
-      url.includes('/analytics/web/') ||
-      hasHint(/google analytics/i, /\bga4\b/i, /analytics\.google/i)
-    ) {
-      return { key: 'google_analytics', baseKey: 'web_general', section: 'analytics' };
-    }
-
-    if (url.includes('business.facebook.com') || url.includes('adsmanager.facebook.com')) {
-      if (section === 'dashboard' || section === 'insights' || hasHint(/\bresults?\b/i, /\bperformance\b/i, /\breport/i, /\binsights?\b/i)) {
-        return { key: 'meta_ads_results', baseKey: 'meta_ads', section: 'results' };
+      if ((segments[0]?.startsWith('@') && segments[0].length > 1) ||
+          (['channel', 'c', 'user'].includes(segments[0]) && segments[1])) {
+        return surface('youtube_channel', 'youtube_channel', 'channel');
       }
-      return { key: 'meta_ads', section: 'campaigns' };
+      return generic;
     }
-    if (url.includes('ads.tiktok.com') || url.includes('business.tiktok.com/ads')) {
-      return { key: 'tiktok_ads', section: 'campaigns' };
+    if (isHost('instagram.com')) {
+      if (['direct', 'accounts', 'explore'].includes(segments[0]) || !segments.length) return generic;
+      if (['reel', 'reels'].includes(segments[0])) return surface('instagram_reel', 'instagram_profile', 'reel');
+      if (hasSegment('insights')) return surface('instagram_insights', 'instagram_profile', 'insights');
+      return surface('instagram_profile', 'instagram_profile', 'profile');
     }
-    if (url.includes('linkedin.com/campaignmanager') || url.includes('linkedin.com/ad')) {
-      return { key: 'linkedin_ads', section: 'campaigns' };
+    if (isHost('tiktok.com')) {
+      if (isHost('analytics.tiktok.com') || hasSegment('analytics')) return surface('tiktok_analytics', 'tiktok_profile', 'analytics');
+      return surface('tiktok_profile', 'tiktok_profile', 'profile');
     }
-    if (url.includes('studio.youtube.com')) {
-      if (hasHint(/\/analytics/i, /\banalytics\b/i, /\brendimiento\b/i, /\bretention\b/i, /\bctr\b/i)) {
-        return { key: 'youtube_analytics', baseKey: 'youtube_channel', section: 'analytics' };
-      }
-      if (url.includes('/promotion') || url.includes('/promotions') || url.includes('/ads')) {
-        return { key: 'youtube_promotions', baseKey: 'youtube_promotions', section: 'promotions' };
-      }
-      return { key: 'youtube_channel', baseKey: 'youtube_channel', section: 'studio' };
-    }
-    if (url.includes('youtube.com/watch') || url.includes('youtube.com/shorts/')) {
-      return { key: 'youtube_video', baseKey: 'youtube_video', section: 'video' };
-    }
-    if (
-      url.includes('youtube.com/@') ||
-      url.includes('youtube.com/channel/') ||
-      url.includes('youtube.com/c/') ||
-      url.includes('youtube.com/user/')
-    ) {
-      return { key: 'youtube_channel', baseKey: 'youtube_channel', section: 'channel' };
-    }
-    if (url.includes('youtube.com')) return { key: 'youtube_channel', baseKey: 'youtube_channel', section: 'channel' };
-    if (url.includes('instagram.com')) {
-      if (hasHint(/\/reel\//i, /\/reels\//i)) return { key: 'instagram_reel', baseKey: 'instagram_profile', section: 'reel' };
-      if (hasHint(/\/insights/i, /\binsights?\b/i, /estadisticas/i, /estadísticas/i)) {
-        return { key: 'instagram_insights', baseKey: 'instagram_profile', section: 'insights' };
-      }
-      return { key: 'instagram_profile', baseKey: 'instagram_profile', section: 'profile' };
-    }
-    if (url.includes('tiktok.com')) {
-      if (url.includes('analytics.tiktok.com') || hasHint(/\/analytics/i, /\banalytics\b/i, /estadisticas/i, /estadísticas/i)) {
-        return { key: 'tiktok_analytics', baseKey: 'tiktok_profile', section: 'analytics' };
-      }
-      return { key: 'tiktok_profile', baseKey: 'tiktok_profile', section: 'profile' };
-    }
-    if (url.includes('x.com') || url.includes('twitter.com')) return { key: 'x_profile', baseKey: 'x_profile', section: 'profile' };
-    if (url.includes('linkedin.com')) return { key: 'linkedin_profile', baseKey: 'linkedin_profile', section: 'profile' };
-    if (url.includes('facebook.com')) return { key: 'facebook_profile', baseKey: 'facebook_profile', section: 'profile' };
+    if (isHost('x.com', 'twitter.com')) return surface('x_profile', 'x_profile', 'profile');
+    if (isHost('linkedin.com')) return surface('linkedin_profile', 'linkedin_profile', 'profile');
+    if (isHost('facebook.com')) return surface('facebook_profile', 'facebook_profile', 'profile');
 
-    if (url.includes('metricool.com')) {
-      if (!url.includes('app.metricool.com')) {
-        return { key: 'web_general', baseKey: 'web_general', section: 'landing' };
+    if (isHost('metricool.com')) {
+      if (!isHost('app.metricool.com')) return { ...generic, section: 'landing' };
+      if (hasSegment('analytics', 'statistics', 'reports', 'report', 'competitors')) {
+        return surface('metricool_analytics', 'metricool_dashboard', 'analytics');
       }
-      if (hasHint(/analytics|estadisticas|estadísticas|reports?|informes?|rendimiento|competitors?|competidores/i)) {
-        return { key: 'metricool_analytics', baseKey: 'metricool_dashboard', section: 'analytics' };
-      }
-      if (hasHint(/planner|calendar|calendario|planificador|publish|publicar|inbox|bandeja/i)) {
-        return { key: 'metricool_planner', baseKey: 'metricool_dashboard', section: 'planner' };
-      }
-      return { key: 'metricool_dashboard', baseKey: 'metricool_dashboard', section: 'social_management' };
+      if (hasSegment('planner', 'calendar', 'publish', 'inbox')) return surface('metricool_planner', 'metricool_dashboard', 'planner');
+      return surface('metricool_dashboard', 'metricool_dashboard', 'social_management');
     }
 
-    if (
-      url.includes('/wp-admin') ||
-      url.includes('wordpress.com/home') ||
-      url.includes('wordpress.com/pages') ||
-      url.includes('wordpress.com/posts') ||
-      url.includes('wordpress.com/plugins') ||
-      url.includes('wordpress.com/customize') ||
-      hasHint(/\bwp-admin\b/i, /\belementor\b/i, /\bdivi\b/i, /\bbeaver builder\b/i, /\bsite editor\b/i)
-    ) {
-      if (hasHint(/post\.php|post-new|edit\.php|page|pages|entradas?|p[aá]ginas?|elementor|customize|site-editor/i)) {
-        return { key: 'wordpress_builder', baseKey: 'wordpress_admin', section: 'builder' };
+    // Custom-domain WordPress: require the admin/editor route itself.
+    // A tutorial or admin sidebar mentioning Elementor/Divi is never enough.
+    const adminIndex = segments.indexOf('wp-admin');
+    const wpRoute = adminIndex >= 0;
+    const wpHosted = isHost('wordpress.com') && ['home', 'pages', 'posts', 'plugins', 'customize', 'site-editor'].includes(segments[0]);
+    if (wpRoute || wpHosted) {
+      const editorRoute = hasSegment('post.php', 'post-new.php', 'edit.php', 'pages', 'posts', 'customize', 'customize.php', 'site-editor', 'site-editor.php');
+      if (editorRoute) return surface('wordpress_builder', 'wordpress_admin', 'builder');
+      return surface('wordpress_admin', 'wordpress_admin', 'dashboard');
+    }
+
+    if (isHost('admin.shopify.com') || (isHost('myshopify.com') && segments[0] === 'admin')) {
+      if (hasSegment('products', 'inventory')) return surface('shopify_products', 'shopify_admin', 'products');
+      if (hasSegment('orders')) return surface('shopify_orders', 'shopify_admin', 'orders');
+      if (hasSegment('checkout', 'payments', 'shipping', 'taxes')) return surface('shopify_checkout', 'shopify_admin', 'checkout');
+      return surface('shopify_admin', 'shopify_admin', 'store_admin');
+    }
+
+    const mercadoPago = /^(?:[a-z0-9-]+\.)*mercadopago\.(?:com|com\.ar|com\.br|com\.mx|com\.co|com\.pe|com\.uy|cl)$/.test(host);
+    if (isHost('app.lemonsqueezy.com', 'dashboard.stripe.com') ||
+        (isHost('paypal.com') && segments[0] === 'business') || mercadoPago) {
+      if (hasSegment('webhooks', 'webhook', 'developers', 'developer', 'api', 'events', 'event', 'logs', 'log')) {
+        return surface('payments_webhooks', 'payments_dashboard', 'webhooks');
       }
-      return { key: 'wordpress_admin', baseKey: 'wordpress_admin', section: 'dashboard' };
+      if (hasSegment('checkout', 'products', 'product', 'variants', 'plans', 'subscriptions')) {
+        return surface('payments_checkout', 'payments_dashboard', 'checkout');
+      }
+      return surface('payments_dashboard', 'payments_dashboard', 'payments');
     }
 
-    if (url.includes('admin.shopify.com') || url.includes('myshopify.com/admin') || hasHint(/\bshopify\b/i)) {
-      if (hasHint(/products?|productos?|inventory|inventario/i)) return { key: 'shopify_products', baseKey: 'shopify_admin', section: 'products' };
-      if (hasHint(/orders?|pedidos?/i)) return { key: 'shopify_orders', baseKey: 'shopify_admin', section: 'orders' };
-      if (hasHint(/checkout|payments?|pagos?|shipping|envios?|envíos?/i)) return { key: 'shopify_checkout', baseKey: 'shopify_admin', section: 'checkout' };
-      return { key: 'shopify_admin', baseKey: 'shopify_admin', section: 'store_admin' };
+    const amazonHost = /^(?:[a-z0-9-]+\.)*(?:sellercentral|advertising)\.amazon\.(?:com|com\.(?:au|br|mx|tr)|co\.(?:uk|jp)|ca|de|es|fr|it|in|nl|se|pl|sg|ae|sa|eg|be|ie)$/.test(host);
+    if (amazonHost) {
+      if (isHost('advertising.amazon.' + host.split('.amazon.')[1]) || hasSegment('advertising', 'campaigns', 'ads')) {
+        return surface('amazon_ads', 'amazon_seller', 'ads');
+      }
+      if (hasSegment('inventory', 'orders', 'fba')) return surface('amazon_operations', 'amazon_seller', 'operations');
+      return surface('amazon_seller', 'amazon_seller', 'seller');
     }
 
-    if (
-      url.includes('app.lemonsqueezy.com') ||
-      url.includes('dashboard.stripe.com') ||
-      url.includes('paypal.com/business') ||
-      url.includes('mercadopago.com') ||
-      hasHint(/\blemon squeezy\b/i, /\bstripe dashboard\b/i, /\bwebhooks?\b/i, /\bcheckout\b/i, /\bpayments?\b/i, /\bpago\b/i)
-    ) {
-      if (hasHint(/webhooks?|developers?|api|eventos?|logs?/i)) return { key: 'payments_webhooks', baseKey: 'payments_dashboard', section: 'webhooks' };
-      if (hasHint(/checkout|products?|productos?|variants?|planes?|subscriptions?|suscripciones/i)) return { key: 'payments_checkout', baseKey: 'payments_dashboard', section: 'checkout' };
-      return { key: 'payments_dashboard', baseKey: 'payments_dashboard', section: 'payments' };
+    const marketplaceHost = /^(?:[a-z0-9-]+\.)*(?:mercadolibre|mercadolivre)\.(?:com|com\.(?:ar|br|mx|co|pe|uy|ec|ve)|cl)$/.test(host);
+    if (marketplaceHost) {
+      if (hasSegment('publicaciones', 'listings', 'products', 'catalog', 'catalogo')) return surface('marketplace_listings', 'marketplace_seller', 'listings');
+      if (hasSegment('ventas', 'orders', 'envios', 'reputacion')) return surface('marketplace_operations', 'marketplace_seller', 'operations');
+      return surface('marketplace_seller', 'marketplace_seller', 'marketplace');
     }
-
-    if (
-      url.includes('sellercentral.amazon') ||
-      url.includes('advertising.amazon') ||
-      hasHint(/amazon seller|seller central|fba|buy box|asin/i)
-    ) {
-      if (hasHint(/advertising|campaigns?|campañas?|ads?/i)) return { key: 'amazon_ads', baseKey: 'amazon_seller', section: 'ads' };
-      if (hasHint(/inventory|inventario|orders?|pedidos?|fba/i)) return { key: 'amazon_operations', baseKey: 'amazon_seller', section: 'operations' };
-      return { key: 'amazon_seller', baseKey: 'amazon_seller', section: 'seller' };
+    if (isHost('printful.com', 'printify.com', 'gelato.com', 'gooten.com', 'spring.com', 'redbubble.com')) {
+      return surface('print_on_demand', 'print_on_demand', 'products');
     }
-
-    if (
-      url.includes('mercadolibre.') ||
-      url.includes('mercadolivre.') ||
-      hasHint(/mercado libre|mercadolibre|publicaciones|ventas|reputacion|reputación/i)
-    ) {
-      if (hasHint(/publicaciones|listings?|productos?|catalogo|catálogo/i)) return { key: 'marketplace_listings', baseKey: 'marketplace_seller', section: 'listings' };
-      if (hasHint(/ventas|orders?|pedidos?|envios?|envíos?|reputacion|reputación/i)) return { key: 'marketplace_operations', baseKey: 'marketplace_seller', section: 'operations' };
-      return { key: 'marketplace_seller', baseKey: 'marketplace_seller', section: 'marketplace' };
-    }
-
-    if (
-      url.includes('printful.com') ||
-      url.includes('printify.com') ||
-      url.includes('gelato.com') ||
-      url.includes('gooten.com') ||
-      url.includes('spring.com') ||
-      url.includes('redbubble.com') ||
-      hasHint(/print on demand|printful|printify|gelato|fulfillment|mockups?|variant(e)?s?/i)
-    ) {
-      return { key: 'print_on_demand', baseKey: 'print_on_demand', section: 'products' };
-    }
-
-    return { key: 'web_general', baseKey: 'web_general', section: 'generic' };
+    return generic;
   }
 
   getContextualSuggestionProfile(environmentSummary = null) {
@@ -8268,8 +8231,9 @@ REGLAS DE EVIDENCIA
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
   }
 
-  getSocialChatContextLabel(url, primaryTitle = '') {
-    const hostname = String(url?.hostname || '').replace(/^www\./, '').toLowerCase();
+  getSocialChatContextLabel(url, primaryTitle = '', surface = this.detectContextualSurface()) {
+    const surfaceKey = surface?.key || 'web_general';
+    const hostname = String(url?.hostname || '').replace(/^www\./, '').toLowerCase().replace(/\.$/, '');
     const pathname = (url?.pathname || '/').replace(/\/+$/, '') || '/';
     const segments = pathname.split('/').filter(Boolean);
     const firstSegment = segments[0] || '';
@@ -8286,29 +8250,30 @@ REGLAS DE EVIDENCIA
       return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
     };
 
-    if (hostname.includes('youtube.com')) {
+    if (surfaceKey.startsWith('youtube_')) {
       if (pathname.startsWith('/watch') || pathname.startsWith('/shorts/')) {
         return primaryTitle ? `Video: ${primaryTitle}` : 'Video actual';
       }
       if (firstSegment.startsWith('@')) {
-        return `Canal: ${this.humanizeChatPathSegment(firstSegment)}`;
+        return `Canal: ${primaryTitle || this.humanizeChatPathSegment(firstSegment)}`;
       }
       return '';
     }
 
     if (!firstSegment || reservedPaths.has(lowerSegment)) {
-      if (hostname.includes('instagram.com') && pathname.startsWith('/reel/')) return 'Instagram · Reel';
-      if (hostname.includes('instagram.com') && pathname.startsWith('/p/')) return 'Instagram · Publicacion';
-      if (hostname.includes('tiktok.com') && pathname.includes('/video/')) return 'TikTok · Video';
+      if (surfaceKey.startsWith('instagram_') && pathname.startsWith('/reel/')) return 'Instagram · Reel';
+      if (surfaceKey.startsWith('instagram_') && pathname.startsWith('/p/')) return 'Instagram · Publicacion';
+      if (surfaceKey.startsWith('tiktok_') && pathname.includes('/video/')) return 'TikTok · Video';
       return '';
     }
 
-    if (hostname.includes('instagram.com')) return `Instagram: ${cleanHandle(firstSegment)}`;
-    if (hostname.includes('tiktok.com')) return `TikTok: ${cleanHandle(firstSegment)}`;
-    if (hostname.includes('x.com') || hostname.includes('twitter.com')) return `X: ${cleanHandle(firstSegment)}`;
-    if (hostname.includes('facebook.com')) return `Facebook: ${cleanHandle(firstSegment)}`;
-    if (hostname.includes('threads.net')) return `Threads: ${cleanHandle(firstSegment)}`;
-    if (hostname.includes('linkedin.com')) {
+    if (surfaceKey.startsWith('instagram_')) return `Instagram: ${cleanHandle(firstSegment)}`;
+    if (surfaceKey.startsWith('tiktok_')) return `TikTok: ${cleanHandle(firstSegment)}`;
+    if (surfaceKey === 'x_profile') return `X: ${cleanHandle(firstSegment)}`;
+    if (surfaceKey === 'facebook_profile') return `Facebook: ${cleanHandle(firstSegment)}`;
+    // Threads has an existing label but no dedicated CTA profile.
+    if (hostname === 'threads.net' || hostname.endsWith('.threads.net')) return `Threads: ${cleanHandle(firstSegment)}`;
+    if (surfaceKey.startsWith('linkedin_')) {
       const entity = ['in', 'company', 'school'].includes(lowerSegment)
         ? (segments[1] || '')
         : firstSegment;
@@ -8322,7 +8287,8 @@ REGLAS DE EVIDENCIA
 	    if (!this.webContext) return 'pagina';
 
     const environmentSummary = this.getEnvironmentContextSummary(this.webContext.environmentContext);
-    if (environmentSummary) {
+    const surface = this.detectContextualSurface(environmentSummary);
+    if (environmentSummary && environmentSummary.platform === this.getContextualSurfacePlatformKey(surface)) {
       const sectionLabel = environmentSummary.sectionLabel ? ` · ${environmentSummary.sectionLabel}` : '';
       return `${environmentSummary.platformLabel}${sectionLabel}`;
     }
@@ -8332,7 +8298,7 @@ REGLAS DE EVIDENCIA
 	      const primaryTitle = this.getMeaningfulChatContextTitle(this.webContext);
 	      const hostname = url.hostname.replace(/^www\./, '') || this.webContext.domain || 'sitio web';
 	      const pathname = (url.pathname || '/').replace(/\/+$/, '') || '/';
-	      const socialLabel = this.getSocialChatContextLabel(url, primaryTitle);
+	      const socialLabel = this.getSocialChatContextLabel(url, primaryTitle, surface);
 	      const urlLabel = this.formatContextUrlLabel(url, this.webContext.domain || 'sitio web');
 	      if (socialLabel) {
 	        return socialLabel;
@@ -8500,6 +8466,10 @@ REGLAS DE EVIDENCIA
     if (!raw || raw.environment === 'GENERIC_WEB') return null;
 
     const platform = String(raw.platform || '').toLowerCase();
+    // Context metadata cannot establish platform membership. Resolve it from
+    // the authorized snapshot URL before building tool-specific instructions.
+    const verifiedPlatform = this.getContextualSurfacePlatformKey(this.detectContextualSurface());
+    if (verifiedPlatform === 'generic_web' || platform !== verifiedPlatform) return null;
     const section = String(raw.section || '').toLowerCase();
     const metrics = raw.metrics || {};
     const metricOrderByPlatform = {
@@ -14437,6 +14407,8 @@ ${details.join('\n')}`;
   
   // System prompt con personalidad Zentra AI
   async buildSystemPrompt({ userMessage = '', imageData = null, environmentSummary = null, interactionMeta = null, taskIntent = null, responseContract = null } = {}) {
+    const verifiedPlatform = this.getContextualSurfacePlatformKey(this.detectContextualSurface());
+    if (verifiedPlatform === 'generic_web' || environmentSummary?.platform !== verifiedPlatform) environmentSummary = null;
     const contract = this.normalizeResponseContract(responseContract);
     const seniorIntentGate = this.isSeniorIntentGate(userMessage, {
       hasImage: this.hasImageData(imageData),
