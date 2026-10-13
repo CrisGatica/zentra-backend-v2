@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createApiSecurity, createCorsOptions, publicStreamEvent } from "./release-security.js";
 import { configureHttpProxy, createHttpBoundary, createDistributedRateLimit, minimalHealth, publicHttpError } from "./release-http-boundary.js";
 import { createOperationGuard, operationContext } from "./release-operations.js";
+import { createChatStatusHandler } from './release-chat-status.js';
 import { logRateLimit, safeRetryAfter } from "./release-rate-observability.js";
 import { validateAudioInput, parseAudioTranscript, fetchAudioResponse } from "./release-audio.js";
 import { createConversationAudioHandlers, createAudioTranscriber } from './release-conversation-audio.js';
@@ -2897,6 +2898,7 @@ function writeNdjsonEvent(res, payload = {}) {
 }
 
 app.get(["/api/health", "/health"], minimalHealth);
+app.get('/api/chat/operation-status', createChatStatusHandler({ client: supabase }));
 
 let conversationAudio;
 const getConversationAudio = () => conversationAudio ||= createConversationAudioHandlers({client:supabase,

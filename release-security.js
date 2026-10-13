@@ -5,7 +5,7 @@ const protectedPaths = new Set([
   "/api/user", "/api/subscription/usage", "/api/subscription/capacity/offers",
   "/api/subscription/consume", "/api/audit/consume", "/api/audit/competitive-search", "/api/audio/transcribe",
   "/api/audit/reserve", "/api/audit/release",
-  "/api/chat", "/api/chat/stream", "/api/lemon/checkout",
+  "/api/chat", "/api/chat/stream", "/api/chat/operation-status", "/api/lemon/checkout",
   "/api/subscription/free/notify",
   "/api/conversation/audio/config", "/api/conversation/audio/prepare", "/api/conversation/audio/process"
 ]);
@@ -47,7 +47,7 @@ export function createApiSecurity({ client, origins = "", now = Date.now, env = 
   const maximumIp = positiveLimit(env.ZENTRA_RATE_AUTH_IP, 240);
   const maximumUser = positiveLimit(env.ZENTRA_RATE_USER_LOCAL, 120);
   const buckets = new Map();
-  const statusReadPaths = new Set(['/api/user', '/api/subscription/usage', '/api/subscription/capacity/offers']);
+  const statusReadPaths = new Set(['/api/user', '/api/subscription/usage', '/api/subscription/capacity/offers', '/api/chat/operation-status']);
   function limited(key, maximum, windowMs = 60000) {
     const time = now();
     if (buckets.size > 10000) {
