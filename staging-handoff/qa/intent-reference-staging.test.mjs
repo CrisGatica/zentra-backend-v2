@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {buildAuthorizedChatRoot} from '../../release-refinements.js';
+import {VERIFIED_REFERENCE_POLICY} from '../../release-response-quality.js';
 
 const backend=new URL('../../',import.meta.url);
 const root=process.env.ZENTRA_CHAT_ROOT || '/Users/cristiangatica/Downloads/IA/Zentra AI/ZENTRA FINALES/STAGING/ZENTRA_AI_CHROME_LAB_STAGING';
@@ -68,7 +69,7 @@ test('explicit SEO audit keeps classification, strategic axes, page grounding an
  assert.equal(JSON.stringify(current.getStrategicResponseSpec(input)),JSON.stringify(old.getStrategicResponseSpec(input)));
  assert.equal(JSON.stringify(current.extractRequestedStrategicAxes(input)),JSON.stringify(old.extractRequestedStrategicAxes(input)));
  const oldPrompt=await old.buildSystemPrompt(before);
- assert.equal(system(await authorized(current,input)),oldPrompt);
+ assert.equal(system(await authorized(current,input)),oldPrompt+'\n\n'+VERIFIED_REFERENCE_POLICY);
  assert.match(oldPrompt,/CONTEXTO DE LA WEB ACTUAL/);
 });
 test('support ticket uses reference tasks without treating their page/SEO mentions as audit instructions',async()=>{

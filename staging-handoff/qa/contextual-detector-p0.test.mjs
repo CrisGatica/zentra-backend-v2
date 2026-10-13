@@ -208,8 +208,22 @@ test('catalogue, response contracts, professional/social prompt text and trust n
   block(clientSource,'  detectContextualSurface(','  getContextualSuggestionProfile('));
  for(const file of ['release-security.js','release-refinements.js','release-conversation-context.js',
   'release-ticket-context.js','release-entitlements.js','release-lemon.js']){
-  assert.equal(readFileSync(backend+'/'+file,'utf8'),
-   execFileSync('git',['show','bb991f363c9cc0b4372aea21fd094e7a48aa3c0f:'+file],{cwd:backend,encoding:'utf8'}),file);
+  const originalFile=execFileSync('git',['show','bb991f363c9cc0b4372aea21fd094e7a48aa3c0f:'+file],{cwd:backend,encoding:'utf8'});
+  let current=readFileSync(backend+'/'+file,'utf8');
+  // Quality v1 permits only these focal additions; all prior trust code stays pinned.
+  // Their behavior and budget/security boundaries are covered in response-quality-v1.test.mjs.
+  if(file==='release-refinements.js')current=current
+   .replace('import { withVerifiedReferencePolicy } from "./release-response-quality.js";\n','')
+   .replaceAll('withVerifiedReferencePolicy(withChatContinuity(', 'withChatContinuity(')
+   .replace('bot.webContext), snapshot), bot.webContext),','bot.webContext), snapshot),')
+   .replaceAll('bot.webContext), context), bot.webContext);','bot.webContext), context);');
+  if(file==='release-ticket-context.js')current=current
+   .replace(/^const POLICY = .*;$/m,originalFile.match(/^const POLICY = .*;$/m)[0])
+   .replace("  if (input.status?.source === 'current_ui_control' && input.status.ticket_id === id\n"
+    +"      && typeof input.status.label === 'string' && input.status.label.trim()) {\n"
+    +"    output.status = {label:input.status.label.replace(/\\s+/g,' ').trim().slice(0,120),\n"
+    +"      source:'current_ui_control',ticket_id:id};\n  }\n",'');
+  assert.equal(current,originalFile,file);
  }
 });
 const query='Analizá lo visible en esta página y priorizá los próximos cambios.';

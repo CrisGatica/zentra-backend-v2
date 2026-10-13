@@ -4,6 +4,7 @@ import { requestFingerprint } from "./release-security.js";
 import { chatPersonalization } from "./release-entitlements.js";
 import { normalizeConversationContext, withConversationEvidence, withChatContinuity } from "./release-conversation-context.js";
 import { normalizeTicketContext, withTicketEvidence } from "./release-ticket-context.js";
+import { withVerifiedReferencePolicy } from "./release-response-quality.js";
 
 // This is the pinned, trusted application code, never JavaScript supplied by a request.
 const builders = new vm.Script(readFileSync(new URL("./trusted-chat-builders.js", import.meta.url), "utf8"));
@@ -123,7 +124,7 @@ export async function buildAuthorizedChatRoot(body, context, user) {
   }
   // Only trusted application builders can produce privileged provider messages.
   const effective = [{ role: "system", content: system }, ...messages.filter(message => ["user", "assistant"].includes(message.role))];
-  return { body: withChatContinuity(withTicketEvidence(withConversationEvidence({ ...body, messages: effective }, bot.webContext.conversationContext), bot.webContext), snapshot),
+  return { body: withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(withConversationEvidence({ ...body, messages: effective }, bot.webContext.conversationContext), bot.webContext), snapshot), bot.webContext),
     context: context ? { ...snapshot, personalization } : null };
 }
 
@@ -240,13 +241,13 @@ export async function buildChatRefinement(stage, root, previousResponse) {
     resolvedUserEmail: requestBody.zentra_user_email || "",
     resolvedUserId: requestBody.zentra_user_id || ""
   };
-  if (stage === "visible") return withChatContinuity(withTicketEvidence(withConversationEvidence(bot.buildVisibleChatRecoveryRequestBody(args), bot.webContext.conversationContext), bot.webContext), context);
+  if (stage === "visible") return withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(withConversationEvidence(bot.buildVisibleChatRecoveryRequestBody(args), bot.webContext.conversationContext), bot.webContext), context), bot.webContext);
   let captured;
   const stop = new Error("Request captured");
   bot.apiProvider = { sendMessages: async request => { captured = request.body; throw stop; } };
   try { await bot[methods[stage]](args); } catch (error) { if (error !== stop) throw error; }
   if (!captured) throw new Error("Refinement not applicable");
-  return withChatContinuity(withTicketEvidence(withConversationEvidence(captured, bot.webContext.conversationContext), bot.webContext), context);
+  return withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(withConversationEvidence(captured, bot.webContext.conversationContext), bot.webContext), context), bot.webContext);
 }
 
 export async function prepareChatStep({ client, identity, product, operationId, body }) {

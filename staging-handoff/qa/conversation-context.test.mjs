@@ -5,6 +5,7 @@ import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {normalizeConversationContext, conversationEvidence} from '../../release-conversation-context.js';
 import {buildAuthorizedChatRoot, buildChatExecutionBody, buildChatRefinement, validateChatRoot, prepareChatStep} from '../../release-refinements.js';
+import {VERIFIED_REFERENCE_POLICY} from '../../release-response-quality.js';
 
 // All content is synthetic. No network, DB, provider, media downloads or quota operations.
 const question='¿Qué pide este cliente?';
@@ -115,7 +116,7 @@ test('empty loaded conversation stays explicit and never falls back to inbox con
  const root=await build(snapshot(fixture({messages:[]})));assert.equal(data(root.body).messages.length,0);assert.equal(data(root.body).history.incomplete,true);
  assert.ok(!root.body.messages[0].content.includes('CONTEXTO DE LA WEB ACTUAL'));
 });
-test('ordinary page without conversation retains byte-identical trusted prompt',async()=>{
+test('ordinary page without conversation retains trusted prompt plus only quality-v1 reference policy',async()=>{
  const ctx=snapshot();delete ctx.state.webContext.conversationContext;
  const oldSource=execFileSync('git',['show','2a38bc0:trusted-chat-builders.js'],{cwd:new URL('../../',import.meta.url),encoding:'utf8'});
  const sandbox=vm.createContext({window:{},document:{addEventListener(){},getElementById(){return null;}},URL,URLSearchParams,console:{log(){},warn(){},error(){}}});
@@ -123,7 +124,7 @@ test('ordinary page without conversation retains byte-identical trusted prompt',
  const bot=Object.create(sandbox.window.ClaudeChatbot.prototype);Object.assign(bot,structuredClone(ctx.state));
  bot.getPromptPersonalizationContext=async()=>null;bot.loadSiteContextForChat=async()=>null;
  const oldPrompt=await bot.buildSystemPrompt({userMessage:question,interactionMeta:ctx.interactionMeta,responseContract:ctx.responseContract});
- const root=await build(ctx);assert.equal(root.body.messages[0].content,oldPrompt);assert.equal(evidenceMessages(root.body).length,0);
+ const root=await build(ctx);assert.equal(root.body.messages[0].content,oldPrompt+'\n\n'+VERIFIED_REFERENCE_POLICY);assert.equal(evidenceMessages(root.body).length,0);
 });
 test('operation handoff persists sanitized conversation and execution keeps one root/debit boundary',async()=>{
  const calls=[];let saved;

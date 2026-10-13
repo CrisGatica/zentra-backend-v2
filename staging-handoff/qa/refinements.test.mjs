@@ -7,6 +7,7 @@ const base=process.env.ZENTRA_BASE;
 const backend=base+'/zentra-backend';
 const clean=base+'/publicacion/chrome-store/zentra-ai-chrome-store-clean';
 const {validateChatRoot,buildChatRefinement}=await import(pathToFileURL(backend+'/release-refinements.js'));
+const {withVerifiedReferencePolicy}=await import(pathToFileURL(backend+'/release-response-quality.js'));
 const source=await readFile(backend+'/trusted-chat-builders.js','utf8');
 const context=vm.createContext({window:{},document:{addEventListener(){}},console,URL,URLSearchParams});
 vm.runInContext(source,context);
@@ -46,8 +47,8 @@ const previous={body:{success:true,response:'Se cambio el video y ahora se ve me
 const actual=await buildChatRefinement('rewrite',root,previous);
 const expected=bot.buildPlainTextRewriteRetryRequestBody({userMessage:rewriteMessage,previousOutput:previous.body.response,
   model:bot.model,maxTokens:body.max_tokens,routingConfig:body.zentra_routing});
-assert.equal(JSON.stringify(actual),JSON.stringify(expected));
-console.log('PASS rewrite is reconstructed from original input and persisted output, same prompt');
+assert.equal(JSON.stringify(actual),JSON.stringify(withVerifiedReferencePolicy(expected)));
+console.log('PASS rewrite retains original input and persisted output, with only quality-v1 reference policy added');
 
 const cases=[
   ['visible','Explicame cómo organizar mis servicios paso a paso.',null],
