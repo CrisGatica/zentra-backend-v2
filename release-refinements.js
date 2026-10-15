@@ -122,6 +122,9 @@ export async function buildAuthorizedChatRoot(body, context, user) {
     }
     system += bot.buildStructuredTaskOrganizationPromptBlock(userMessage);
   }
+  const hasVisualEvidence = messages.some(message => message.role === 'user'
+    && Array.isArray(message.content) && message.content.some(part => part.type === 'image_url'));
+  system += bot.buildVisualScheduleComparisonPromptBlock(userMessage, hasVisualEvidence);
   // Only trusted application builders can produce privileged provider messages.
   const effective = [{ role: "system", content: system }, ...messages.filter(message => ["user", "assistant"].includes(message.role))];
   return { body: withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(withConversationEvidence({ ...body, messages: effective }, bot.webContext.conversationContext), bot.webContext), snapshot), bot.webContext),
@@ -228,6 +231,10 @@ export async function buildChatRefinement(stage, root, previousResponse) {
     ? message.content.filter(part => part.type === "image_url").map(part => ({ base64: part.image_url?.url })) : []);
   const imageData = images.length ? { ...images[0], images } : null;
   const data = previousResponse?.body || { success: true, response: previousResponse?.text || "" };
+  const scheduleRules = bot.buildVisualScheduleComparisonPromptBlock(userMessage, images.length > 0);
+  const preserveScheduleRules = body => !scheduleRules ? body : {...body, messages: body.messages.map(message =>
+    message.role === 'system' && typeof message.content === 'string' && !message.content.includes(scheduleRules)
+      ? {...message, content: message.content + scheduleRules} : message)};
   const assistantText = bot.resolveAssistantTextSafely(data, {
     userMessage, taskIntent: context.taskIntent, applyWeakRewriteFallback: false
   }) || bot.buildLastResortAssistantText(data);
@@ -241,13 +248,13 @@ export async function buildChatRefinement(stage, root, previousResponse) {
     resolvedUserEmail: requestBody.zentra_user_email || "",
     resolvedUserId: requestBody.zentra_user_id || ""
   };
-  if (stage === "visible") return withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(withConversationEvidence(bot.buildVisibleChatRecoveryRequestBody(args), bot.webContext.conversationContext), bot.webContext), context), bot.webContext);
+  if (stage === "visible") return preserveScheduleRules(withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(withConversationEvidence(bot.buildVisibleChatRecoveryRequestBody(args), bot.webContext.conversationContext), bot.webContext), context), bot.webContext));
   let captured;
   const stop = new Error("Request captured");
   bot.apiProvider = { sendMessages: async request => { captured = request.body; throw stop; } };
   try { await bot[methods[stage]](args); } catch (error) { if (error !== stop) throw error; }
   if (!captured) throw new Error("Refinement not applicable");
-  return withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(withConversationEvidence(captured, bot.webContext.conversationContext), bot.webContext), context), bot.webContext);
+  return preserveScheduleRules(withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(withConversationEvidence(captured, bot.webContext.conversationContext), bot.webContext), context), bot.webContext));
 }
 
 export async function prepareChatStep({ client, identity, product, operationId, body }) {
