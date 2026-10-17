@@ -1,0 +1,1130 @@
+{
+  "tables": [
+    {
+      "table_name": "users",
+      "column_name": "id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "email",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "plan",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "plan_type",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "status",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "audit_credits",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "audit_credits_used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "actions_used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "audits_used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "premium_chat_used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "premium_pdf_used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "extra_actions_balance",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "extra_audits_balance",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "extra_actions_used_cycle",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "extra_audits_used_cycle",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "extra_actions_purchased_total",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "extra_audits_purchased_total",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "purchase_history",
+      "data_type": "jsonb",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "billing_cycle_start",
+      "data_type": "bigint",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "auth_user_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "billing_status",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "subscription_ends_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "subscription_renews_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "billing_updated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "lemon_subscription_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "billing_policy_pending",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "users",
+      "column_name": "lemon_store_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "lemon_customer_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "lemon_variant_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "lemon_product_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "billing_interval",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "billing_pause_mode",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "users",
+      "column_name": "subscription_trial_ends_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_ai_schema_releases",
+      "column_name": "release_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_ai_schema_releases",
+      "column_name": "applied_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_ai_schema_releases",
+      "column_name": "function_hashes",
+      "data_type": "jsonb",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_acquisitions",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_acquisitions",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_acquisitions",
+      "column_name": "source",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_acquisitions",
+      "column_name": "state",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_acquisitions",
+      "column_name": "lease_token",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_acquisitions",
+      "column_name": "lease_until",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_search_budgets",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_search_budgets",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_search_budgets",
+      "column_name": "used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_steps",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_steps",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_steps",
+      "column_name": "step_name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_steps",
+      "column_name": "request_hash",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_steps",
+      "column_name": "body",
+      "data_type": "jsonb",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_audit_steps",
+      "column_name": "context",
+      "data_type": "jsonb",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_audit_steps",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_chat_steps",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_chat_steps",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_chat_steps",
+      "column_name": "step_name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_chat_steps",
+      "column_name": "request_hash",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_chat_steps",
+      "column_name": "body",
+      "data_type": "jsonb",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_chat_steps",
+      "column_name": "context",
+      "data_type": "jsonb",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_chat_steps",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "auth_user_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "activated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "expires_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "ever_used",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "waitlisted_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "notify_free_opening",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "actions_used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "audits_used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_access",
+      "column_name": "premium_chat_used",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_launch_config",
+      "column_name": "singleton",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_launch_config",
+      "column_name": "capacity_total",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_launch_config",
+      "column_name": "access_days",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_launch_config",
+      "column_name": "enabled",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_launch_config",
+      "column_name": "activated_total",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_receipts",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_receipts",
+      "column_name": "counter",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_receipts",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_receipts",
+      "column_name": "auth_user_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_free_receipts",
+      "column_name": "active",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_http_rate_buckets",
+      "column_name": "subject",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_http_rate_buckets",
+      "column_name": "category",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_http_rate_buckets",
+      "column_name": "count",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_http_rate_buckets",
+      "column_name": "expires_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "token_hash",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "auth_user_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "store_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "variant_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "product_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "family",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "plan",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "billing_interval",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "expires_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_checkouts",
+      "column_name": "resource_id",
+      "data_type": "text",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_lemon_customers",
+      "column_name": "store_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_customers",
+      "column_name": "customer_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_customers",
+      "column_name": "auth_user_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "event_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "event_name",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "resource_type",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "resource_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "store_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "provider_updated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "outcome",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "metadata",
+      "data_type": "jsonb",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_events",
+      "column_name": "received_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_subscriptions",
+      "column_name": "store_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_subscriptions",
+      "column_name": "subscription_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_subscriptions",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_subscriptions",
+      "column_name": "customer_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_subscriptions",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_subscriptions",
+      "column_name": "checked_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_lemon_subscriptions",
+      "column_name": "sync_until",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_lemon_subscriptions",
+      "column_name": "sync_token",
+      "data_type": "uuid",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_payment_receipts",
+      "column_name": "order_id",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_payment_receipts",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_payment_receipts",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "source_hash",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "request_hash",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "kind",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "state",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "attempts",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "response",
+      "data_type": "jsonb",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "lease_until",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "lease_token",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "provider_started_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_requests",
+      "column_name": "useful_response",
+      "data_type": "boolean",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_allocations",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_allocations",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_allocations",
+      "column_name": "request_hash",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_allocations",
+      "column_name": "lease_token",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_allocations",
+      "column_name": "reserved",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_allocations",
+      "column_name": "actual",
+      "data_type": "integer",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "request_hash",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "state",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "attempts",
+      "data_type": "integer",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "lease_token",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "lease_until",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "provider_started_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_search_requests",
+      "column_name": "response",
+      "data_type": "jsonb",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_usage_receipts",
+      "column_name": "user_id",
+      "data_type": "uuid",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_usage_receipts",
+      "column_name": "counter",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_usage_receipts",
+      "column_name": "operation_key",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_usage_receipts",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_usage_receipts",
+      "column_name": "funding",
+      "data_type": "text",
+      "is_nullable": "NO"
+    },
+    {
+      "table_name": "zentra_usage_receipts",
+      "column_name": "billing_cycle",
+      "data_type": "bigint",
+      "is_nullable": "YES"
+    },
+    {
+      "table_name": "zentra_usage_receipts",
+      "column_name": "refunded_at",
+      "data_type": "timestamp with time zone",
+      "is_nullable": "YES"
+    }
+  ],
+  "functions": [
+    {
+      "proname": "zentra_access",
+      "args": "text, text, text",
+      "body_md5": "4a29960299407931b09df6a026f0f5c4"
+    },
+    {
+      "proname": "zentra_access_before_free",
+      "args": "text, text, text",
+      "body_md5": "5b39b62f048b172ffe921126e0a9557d"
+    },
+    {
+      "proname": "zentra_access_before_lemon",
+      "args": "text, text, text",
+      "body_md5": "4fdf095f5326352641a658ee1dca2a9c"
+    },
+    {
+      "proname": "zentra_acquire_audit",
+      "args": "text, text, text, text, text, uuid, boolean",
+      "body_md5": "42c77054918c64ba8657f52f05bb970f"
+    },
+    {
+      "proname": "zentra_apply_payment",
+      "args": "text, text, text, text, text, timestamp with time zone, timestamp with time zone, timestamp with time zone, integer, integer, jsonb",
+      "body_md5": "8fd269218e694bd8c6e23e4f182b7f14"
+    },
+    {
+      "proname": "zentra_apply_payment_before_lemon",
+      "args": "text, text, text, text, text, timestamp with time zone, timestamp with time zone, timestamp with time zone, integer, integer, jsonb",
+      "body_md5": "43bc8ae424048c6059514a2b42f3f7c3"
+    },
+    {
+      "proname": "zentra_begin_request",
+      "args": "text, text, text, text, text, text, text, boolean, uuid",
+      "body_md5": "6d0b6f4ef8d6101f19f07aec2dec5b43"
+    },
+    {
+      "proname": "zentra_begin_search",
+      "args": "text, text, text, text, text",
+      "body_md5": "24fa6f516ef04697bcb69ccb1d31cb32"
+    },
+    {
+      "proname": "zentra_checkpoint_response",
+      "args": "uuid, text, text, uuid, jsonb",
+      "body_md5": "b846d7a5f33232c44e893c20abf6afdd"
+    },
+    {
+      "proname": "zentra_consume",
+      "args": "text, text, text, text, text, boolean",
+      "body_md5": "98b90992d4c6195e11cf5ecfb7386ad9"
+    },
+    {
+      "proname": "zentra_consume_before_free",
+      "args": "text, text, text, text, text, boolean",
+      "body_md5": "70146e02faa81bb62de37c5f3a45e5c6"
+    },
+    {
+      "proname": "zentra_consume_generation",
+      "args": "text, text, text, text, text, text, uuid, boolean",
+      "body_md5": "f448ebeefe17106c28241cb8e6580dd5"
+    },
+    {
+      "proname": "zentra_executive_phase",
+      "args": "uuid, text, text, uuid, text, jsonb",
+      "body_md5": "a7f14a8e886c6a82505f6c6948b2ead0"
+    },
+    {
+      "proname": "zentra_finish_request",
+      "args": "uuid, text, text, uuid, jsonb, boolean",
+      "body_md5": "18557b06df4c0c1222c04931b598f44c"
+    },
+    {
+      "proname": "zentra_finish_search",
+      "args": "uuid, text, text, uuid, jsonb, boolean",
+      "body_md5": "4d1b4b460d8a75488d298e2c78feffb7"
+    },
+    {
+      "proname": "zentra_free_notify",
+      "args": "text, text",
+      "body_md5": "86b42e6bdef9dd6f3c05aa59d5b23a71"
+    },
+    {
+      "proname": "zentra_free_status",
+      "args": "text, text, text",
+      "body_md5": "a2dca061ccd1f318f07287de9567ba3e"
+    },
+    {
+      "proname": "zentra_handoff_audit",
+      "args": "text, text, text, text, uuid",
+      "body_md5": "8ad0fac2b5bb9f66bc1768299bb8d2cd"
+    },
+    {
+      "proname": "zentra_http_rate_limit",
+      "args": "text, text, integer",
+      "body_md5": "50135da22fcf3196e9ad3940b843ecf7"
+    },
+    {
+      "proname": "zentra_lemon_checkout",
+      "args": "text, text, text, text, text, text, text, text, text",
+      "body_md5": "9e2d8bc87e74baa5422c4675584cde84"
+    },
+    {
+      "proname": "zentra_lemon_event",
+      "args": "text, text, text, text, text, jsonb",
+      "body_md5": "ca98639e7bed051803eff5096ecdcc7e"
+    },
+    {
+      "proname": "zentra_lemon_event_seen",
+      "args": "text",
+      "body_md5": "c309058e1ade1c204f1129685a14705b"
+    },
+    {
+      "proname": "zentra_lemon_sync_claim",
+      "args": "text",
+      "body_md5": "d85362116727fcb021ea141762acedbc"
+    },
+    {
+      "proname": "zentra_lemon_sync_finish",
+      "args": "text, text, uuid, boolean",
+      "body_md5": "2c5e88f19706d74854e5c7cf80b97737"
+    },
+    {
+      "proname": "zentra_read_audit_steps",
+      "args": "text, text, text, text",
+      "body_md5": "30fdb8f146f5fb56b173168b2647f3ac"
+    },
+    {
+      "proname": "zentra_read_chat_steps",
+      "args": "text, text, text, text",
+      "body_md5": "3f10f1bee9f7b9b5f562ed0caef4ee5e"
+    },
+    {
+      "proname": "zentra_reap_search_leases",
+      "args": "uuid",
+      "body_md5": "5242f3a4fe5787aeb5869e65ef3deb2b"
+    },
+    {
+      "proname": "zentra_refund_failed",
+      "args": "uuid, text",
+      "body_md5": "d02bc4a650a6986739dd4d819c71020e"
+    },
+    {
+      "proname": "zentra_register_audit_step",
+      "args": "text, text, text, text, text, text, jsonb, jsonb",
+      "body_md5": "3bebc146732f8c94d356f2896aa6e5c0"
+    },
+    {
+      "proname": "zentra_register_chat_step",
+      "args": "text, text, text, text, text, text, jsonb, jsonb",
+      "body_md5": "8dc7cba113e9d4b4c099cae63885869e"
+    },
+    {
+      "proname": "zentra_release_audit",
+      "args": "text, text, text, text, uuid",
+      "body_md5": "ce605723937072db11936f9fb1a7a2f3"
+    },
+    {
+      "proname": "zentra_release_executive_premium",
+      "args": "uuid, text, text, uuid",
+      "body_md5": "6995e3d41d7cf0bfa21fde24064808d7"
+    },
+    {
+      "proname": "zentra_renew_request",
+      "args": "uuid, text, text, uuid",
+      "body_md5": "225ad2044bd8aefe88c0f51c4bb7edf0"
+    },
+    {
+      "proname": "zentra_renew_search",
+      "args": "uuid, text, text, uuid",
+      "body_md5": "168415c0a035f86ebbffd383158e568c"
+    },
+    {
+      "proname": "zentra_reserve_search_budget",
+      "args": "uuid, text, text, uuid",
+      "body_md5": "b438a3b33c772751520d3907006793ea"
+    },
+    {
+      "proname": "zentra_resume_executive",
+      "args": "text, text, text, text, text",
+      "body_md5": "5e374bdb89ee52b85259be47089601fa"
+    },
+    {
+      "proname": "zentra_settle_search_budget",
+      "args": "uuid, text, text, uuid, integer",
+      "body_md5": "525c7a5bf82838ef604e7e048339ee13"
+    },
+    {
+      "proname": "zentra_start_provider",
+      "args": "uuid, text, text, uuid",
+      "body_md5": "9651b9977c80a40ce3e7e59693c0e2cc"
+    },
+    {
+      "proname": "zentra_start_search",
+      "args": "uuid, text, text, uuid",
+      "body_md5": "c73b60455af5a11deb494191ccd4f221"
+    },
+    {
+      "proname": "zentra_track_free_receipt",
+      "args": "",
+      "body_md5": "2c8060c01c760adcfb378079578efcef"
+    }
+  ]
+}

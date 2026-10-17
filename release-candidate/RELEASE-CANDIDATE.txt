@@ -1,6 +1,16 @@
 ZENTRA AI — RELEASE CANDIDATE LOCAL DE PRODUCCIÓN
 17/10/2026 — NO APTO PARA PUBLICACIÓN HASTA CERRAR LOS BLOQUEOS
 
+ADENDA DE CIERRE — prevalece sobre el diagnóstico histórico de abajo:
+El propietario confirmó primera publicación Store, sin clientes externos,
+Desktop fuera del lanzamiento, Live main 5adc763/Auto-Deploy OFF y proyecto
+ohakwaihhuenpensoedh, sin las dos tablas de asociaciones Lemon.
+Delta posterior a 22e54eb: identidad Auth antes del claim billing, cupo premium
+PDF 10/30 con recibo compartido y SQL productivo transaccional/rechazo unlimited.
+No se copiaron asociaciones de prueba ni se resetearon contadores. Extensión/ZIP
+siguen en 28abd31, sin cambios. Instrucciones actuales y limitación del catálogo:
+release-candidate/migrations/README.txt. El resto conserva el registro histórico.
+
 1. IDENTIDAD Y AISLAMIENTO
 
 Rama: release/zentra-ai-v1-rc-20261017, sin upstream.

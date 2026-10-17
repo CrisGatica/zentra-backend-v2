@@ -67,10 +67,11 @@ for(const [plan,pages]of Object.entries({free:3,starter:5,pro:7,agency:11}))test
   assert.equal(calls[0].args.p_auth_id,'verified-user');assert.equal(calls[1].args.p_unlimited,false);
 });
 
-test('commercial catalog, base quotas and production premium defaults are preserved',()=>{
+test('commercial catalog/base quotas are preserved; PDF uses one receipt per approved audit',()=>{
   assert.equal(block(server,'LEMON_PRODUCTS'),block(original,'LEMON_PRODUCTS'));
   assert.equal(block(server,'PLAN_LIMITS'),block(original,'PLAN_LIMITS'));
-  assert.equal(block(server,'PREMIUM_LIMITS'),block(original,'PREMIUM_LIMITS'));
+  assert.deepEqual(clone(vm.runInNewContext(block(server,'PREMIUM_LIMITS')+'\nPREMIUM_LIMITS')),
+    {free:{premium_chat_used:3,premium_pdf_used:0},starter:{premium_chat_used:30,premium_pdf_used:0},pro:{premium_chat_used:100,premium_pdf_used:10},agency:{premium_chat_used:300,premium_pdf_used:30}});
   assert.deepEqual(Object.fromEntries(Object.entries(PLAN_ENTITLEMENTS).map(([p,v])=>[p,[v.actions,v.audits]])),
     {free:[20,1],starter:[300,5],pro:[800,10],agency:[3000,30]});
 });
@@ -88,7 +89,7 @@ test('paid reconciliation without verified binding fails closed even with spoofe
     fetchImpl:noNetwork,client:{async rpc(name,args){calls.push({name,args});return {data:{unverified:true}};}}});
   await handlers.reconcile({auth:{userId:'verified-user',email:'fixture@example.test'},path:'/api/chat',body:{plan:'agency',unlimited_agency:true}},response,()=>next++);
   assert.equal(response.statusCode,503);assert.equal(response.body.code,'billing_association_required');assert.equal(next,0);
-  assert.deepEqual(calls.map(c=>c.name),['zentra_lemon_sync_claim']);assert.equal(calls[0].args.p_auth,'verified-user');
+  assert.deepEqual(calls.map(c=>c.name),['zentra_access','zentra_lemon_sync_claim']);assert.equal(calls[1].args.p_auth,'verified-user');
 });
 
 test('webhooks require a valid signature; no payment is submitted',()=>{

@@ -104,8 +104,9 @@ const PLAN_LIMITS = {
 const PREMIUM_LIMITS = {
   free: { premium_chat_used: 3, premium_pdf_used: 0 },
   starter: { premium_chat_used: 30, premium_pdf_used: 0 },
-  pro: { premium_chat_used: 100, premium_pdf_used: 30 },
-  agency: { premium_chat_used: 300, premium_pdf_used: 80 }
+  // One shared premium receipt per audit, not one debit per refinement phase.
+  pro: { premium_chat_used: 100, premium_pdf_used: 10 },
+  agency: { premium_chat_used: 300, premium_pdf_used: 30 }
 };
 const TEMP_UNLIMITED_LIMIT = 999999;
 // No test account allowlist is included in the production release.

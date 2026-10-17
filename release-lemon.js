@@ -111,6 +111,13 @@ export function createLemonHandlers({ client, products, env = process.env, logge
       let target;
       let success = false;
       try {
+        // Resolve the authenticated identity before looking up billing. Legacy
+        // rows can lack auth_user_id; a missing row must not bypass the first
+        // billing check and later inherit a paid plan through zentra_access.
+        // This does not create a Lemon customer/subscription association.
+        await rpc("zentra_access", {
+          p_auth_id: req.auth.userId, p_email: req.auth.email, p_product: "subscription"
+        });
         target = await rpc("zentra_lemon_sync_claim", { p_auth: req.auth.userId });
         if (!target) return next();
         if (target.busy) return safeFailure(res, "billing_sync_pending");

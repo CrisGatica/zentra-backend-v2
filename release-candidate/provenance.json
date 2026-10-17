@@ -1,6 +1,26 @@
 {
   "status": "LOCAL_CANDIDATE_NOT_AUTHORIZED_FOR_DEPLOYMENT",
   "date": "2026-10-17",
+  "closure": {
+    "parentCandidate": "22e54eb03ce4eaae5f423c8a83fa26c8fff97265",
+    "userConfirmed": {
+      "firstStorePublication": true,
+      "externalCustomers": 0,
+      "testAccounts": {"agencySubscription": 2, "freeSubscription": 5, "agencyAudit": 1},
+      "desktopExcludedFromLaunch": true,
+      "service": "zentra-backend-v2",
+      "branch": "main",
+      "liveSHAPrefix": "5adc763",
+      "autoDeploy": "OFF",
+      "supabaseProject": "ohakwaihhuenpensoedh",
+      "missingTables": ["zentra_lemon_customers", "zentra_lemon_subscriptions"]
+    },
+    "runtimeChanges": ["Resolve verified Auth identity before billing claim", "Shared PDF receipt limits Pro 10 / Agency 30"],
+    "manualSchemaPackage": "release-candidate/migrations",
+    "schemaPackageScope": "Legacy-users-only bootstrap; abort on unknown partial schema, no automatic backfill/reset",
+    "focusedVerification": {"postgresqlSyntheticScenarios": 11, "newIdentityTests": 2, "affectedExistingTests": 2, "passed": 15, "providers": 0},
+    "historicalSourceHashesBelow": "Initial RC provenance; current closure files are pinned by the new local Git commit"
+  },
   "branch": "release/zentra-ai-v1-rc-20261017",
   "backendBase": "5adc7635f69042fe8cf343e756033c192f25bead",
   "backendReference": "d41867d64cfee0ea74938407b1164119e9fa10aa",
@@ -410,12 +430,10 @@
     "inboxApp": true
   },
   "blockers": [
-    "Production Live SHA/Auto-Deploy/Supabase schema/roles/backups unknown: browser use disabled",
-    "Previous local client SEO root differs from authorized builder; actual published Store artifact/version unknown",
-    "Paid subscription bindings, checkout entrypoints and production account/schema compatibility unverified; no provider or DB inspected",
-    "Production premium_pdf defaults 30/80 vs staging SQL 10/30 require DB comparison and explicit policy; no quota migration prepared",
-    "Store ID/version 1.0.3 eligibility and production public-key association require Live verification",
-    "Shared product=audit consumers remain unverified and out of scope; no deployment may alter them implicitly"
+    "Only two missing tables are confirmed; run the metadata-only required-catalog preflight under separate authorization before selecting a production schema delta",
+    "Record full Live SHA/deploy ID and recovery point immediately before the authorized cutover; user confirmed main/5adc763/Auto-Deploy OFF/project",
+    "Launch purchases must use authenticated bound checkout; static legacy checkout URLs cannot auto-credit by email",
+    "Independent Audit app remains excluded; shared accounting tested locally, not a functional certification of that application"
   ],
   "checks": {
     "newFocusedTests": 22,
