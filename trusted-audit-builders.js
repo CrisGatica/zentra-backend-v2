@@ -1320,7 +1320,7 @@ ${String(page.content).trim().slice(0, 1800)}`
 
     if (poorlyConnected.length > 0) {
       insights.push({
-        title: 'Páginas aisladas dentro del sitio',
+        title: 'Baja conexión entre las páginas analizadas',
         detail: `${poorlyConnected.map((page) => getPageDescriptor(page)).join(', ')} tiene poca conexion interna con el resto de paginas analizadas.`,
         recommendation: 'Cruzar enlaces contextuales entre secciones relacionadas y agregar retorno visible hacia la pagina principal.',
         priority: 'media'
@@ -2438,6 +2438,14 @@ ${String(page.content).trim().slice(0, 1800)}`
     const headline = this.normalizeCompetitiveToken([pageData.title, pageData.seoStructure?.headings?.h1, ...(pageData.h1s || [])].filter(Boolean).join(' '));
     const description = this.normalizeCompetitiveToken(pageData.metaDescription || '');
     const contains = (text, phrase) => (' ' + text + ' ').includes(' ' + this.normalizeCompetitiveToken(phrase) + ' ');
+    // A declared service "for" an audience is not the audience's own trade.
+    // Keep that relationship from current commercial headings, not inferred body mentions.
+    const offeredToAudience = [pageData.title, pageData.seoStructure?.headings?.h1, ...(pageData.h1s || [])]
+      .filter(value => typeof value === 'string')
+      .map(value => value.match(/\b(marketing(?:\s+digital)?|dise[ñn]o\s+web|publicidad(?:\s+digital)?|soluciones?\s+digitales?|software|plataforma)\s+para\s+([^|.!?;]{3,100})/i))
+      .filter(Boolean);
+    const offeredTopics = unique(offeredToAudience.map(match => match[0].trim()), 3);
+    const audienceText = this.normalizeCompetitiveToken(offeredToAudience.map(match => match[2]).join(' '));
     const relevance = phrase => (contains(headline, phrase) ? 100 : 0) + (contains(description, phrase) ? 20 : 0) +
       analyzedPages.filter(page => page.readStatus === 'complete' && contains(this.normalizeCompetitiveToken([page.title, page.h1].join(' ')), phrase)).length;
     const matchesCatalog = catalog => catalog.filter(phrase => contains(normalizedText, phrase))
@@ -2460,9 +2468,12 @@ ${String(page.content).trim().slice(0, 1800)}`
       .sort((a, b) => relevance(b) - relevance(a));
     supported = supported.filter(term => this.isAuditTopicPhrase(term));
     if (representative.multiPage && !categories.length && !services.length) supported = representative.topics;
+    if (offeredTopics.length) {
+      supported = unique([...offeredTopics, ...supported.filter(term => !contains(audienceText, term))], 30);
+    }
 
     const primary = unique([
-      representative.multiPage ? '' : category,
+      representative.multiPage || offeredTopics.length ? '' : category,
       ...supported
     ], 5);
     const validIntent = phrase => primary.some(term => contains(this.normalizeCompetitiveToken(phrase), term)) &&
@@ -2487,7 +2498,8 @@ ${String(page.content).trim().slice(0, 1800)}`
     ], 4);
 
     analysis.businessFocus = {
-      primaryActivities: representative.multiPage ? supported.slice(0, 3) : supported.filter(phrase => contains(headline, phrase)),
+      primaryActivities: offeredTopics.length ? offeredTopics : representative.multiPage ? supported.slice(0, 3) : supported.filter(phrase => contains(headline, phrase)),
+      observedAudience: offeredToAudience.map(match => match[2].trim()),
       observedServices: supported,
       evidenceUrl: pageData.url || '',
       confidence: supported.some(phrase => contains(headline, phrase)) ? 'actividad declarada en título o H1' : 'actividad pendiente de confirmar'
@@ -3595,7 +3607,7 @@ ${String(page.content).trim().slice(0, 1800)}`
       const pageHints = ['inicio', 'contacto', 'portfolio', 'blog'].filter(term => normalize(action).split(' ').includes(term));
       const matched = findings.filter(item => urls.length ? urls.some(url => url.replace(/[.,;:]+$/, '') === item.url)
         : kind && family(item.issue) === kind && (!pageHints.length || pageHints.some(term => normalize([item.label, item.url].join(' ')).includes(term))));
-      const uncertain = !matched.length || matched.some(item => /no se ha confirmado|no se confirm[oó]|validar|sin comprobar|n[uú]mero por s[ií] solo/i.test(String(item.issue).split(/Adem[aá]s/i)[0])) || kind === 'alt' || kind === 'canonical' ||
+      const uncertain = !matched.length || matched.some(item => /no se ha confirmado|no se confirm[oó]|no se observ[oó]|no se encontr[oó]|validar|sin comprobar|n[uú]mero por s[ií] solo/i.test(String(item.issue).split(/Adem[aá]s/i)[0])) || kind === 'alt' || kind === 'canonical' ||
         (kind === 'description' && !matched.some(item => /no se detect[oó] meta|meta descripci[oó]n ausente/i.test(item.issue)));
       const scope = [...new Set(matched.map(item => item.url).filter(Boolean))];
       const verification = kind === 'coverage' ? 'Repetir la lectura autorizada, registrar el resultado y distinguir un fallo de adquisición de un problema confirmado del sitio.'
@@ -4355,8 +4367,8 @@ DEVUELVE JSON CON:
 
         if (page.h1Count === 0) {
           addCandidate(
-            'No se encontró un H1 visible, lo que dificulta comunicar a Google y al usuario cuál es el foco principal de la página.',
-            'Agregar un H1 único que resuma la intención principal de esta URL con lenguaje claro y orientado a búsqueda.',
+            'No se observó un H1 en la lectura de esta URL. Confirmar su ausencia en la página renderizada antes de intervenir.',
+            'Verificar el H1 en el DOM y el contenido visible. Añadir uno acorde a la intención de esta URL solo si se confirma su ausencia.',
             'alta'
           );
         } else if (page.h1Count > 1) {
@@ -4997,6 +5009,7 @@ ${scopeRule}
 - Si alguna pagina interna falla, continua con las disponibles.
 - Las paginas internas con contexto parcial sirven para detectar patrones, contenido y competencia, pero no deben bajar el puntaje tecnico si no hay lectura DOM confiable.
 - Basa keywords y recomendaciones SOLO en el contenido visible consolidado.
+- Distingue la actividad y los servicios que vende la empresa del sector de sus clientes. Una oferta de marketing, software o diseño web para un sector no convierte al proveedor en un negocio de ese sector. Conserva esa relación en las consultas sugeridas; sin datos de demanda, son hipótesis.
 - Ignora codigo, scripts y terminos tecnicos.
 - No cambies la estructura del JSON.
 - No inventes nada. Si una observacion no esta respaldada por CONTEXTO CONSOLIDADO, DATOS o SENALES POR PAGINA, no la afirmes como hecho.
