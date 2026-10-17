@@ -4,6 +4,7 @@ import { createCompetitiveSearchHandler, verifiedCompetitiveResults } from "./re
 
 const source = { url: "https://salon.example/servicios" };
 const validData = {
+  status: "completed",
   output: [
     { type: "web_search_call", action: { sources: [source] } },
     { type: "message", content: [{ type: "output_text", text: JSON.stringify({ results: [
@@ -19,6 +20,53 @@ function mockResponse() {
     status(code) { this.statusCode = code; return this; },
     json(body) { this.body = body; return this; } };
 }
+
+function budgeted(req) {
+  return { ...req, reserveSearchBudget: async () => 3, settleSearchBudget: async () => {} };
+}
+
+test("search requires a durable budget even with an authenticated session", async () => {
+  let calls = 0;
+  const handler = createCompetitiveSearchHandler({ apiKey: "fixture", fetchImpl: async () => { calls++; } });
+  const res = mockResponse();
+  await handler({ auth: { userId: "user-1" }, body: { queries: ["software"], siteDomain: "business.test" } }, res);
+  assert.equal(res.statusCode, 502); assert.equal(calls, 0);
+});
+
+test("pending budget is retryable, not a permanently cached empty result; exhausted budget calls no provider", async () => {
+  let allowance = -1, calls = 0;
+  const handler = createCompetitiveSearchHandler({ apiKey: "fixture", fetchImpl: async () => {
+    calls++; return { ok: true, json: async () => validData };
+  } });
+  const req = { ...budgeted({ auth: { userId: "user-1" }, body: { queries: ["software"], siteDomain: "business.test" } }),
+    reserveSearchBudget: async () => allowance };
+  const pending = mockResponse(); await handler(req, pending); assert.equal(pending.statusCode, 425); assert.equal(calls, 0);
+  allowance = 0; const exhausted = mockResponse(); await handler(req, exhausted); assert.equal(exhausted.body.error, "search_budget_exhausted"); assert.equal(calls, 0);
+  allowance = 1; const ready = mockResponse(); await handler(req, ready); assert.equal(ready.statusCode, 200); assert.equal(calls, 1);
+});
+
+test("incomplete response retains its allowance but preserves already verified sources", async () => {
+  let settled = 0;
+  const handler = createCompetitiveSearchHandler({ apiKey: "fixture", fetchImpl: async () => ({
+    ok: true, json: async () => ({ ...validData, status: "incomplete" })
+  }) });
+  const req = budgeted({ auth: { userId: "user-1" }, body: { queries: ["software"], siteDomain: "business.test" } });
+  req.settleSearchBudget = async () => { settled++; };
+  const res = mockResponse(); await handler(req, res);
+  assert.equal(res.statusCode, 200); assert.equal(res.body.results.length, 1); assert.equal(settled, 0);
+});
+
+test("malformed response cannot reset allowance; telemetry sink failure cannot break a confirmed result", async () => {
+  let settled = 0;
+  const req = budgeted({ auth: { userId: "user-1" }, body: { queries: ["software"], siteDomain: "business.test" } });
+  req.settleSearchBudget = async () => { settled++; };
+  const bad = createCompetitiveSearchHandler({ apiKey: "fixture", fetchImpl: async () => ({ ok: true, json: async () => ({}) }) });
+  const rejected = mockResponse(); await bad(req, rejected);
+  assert.equal(rejected.statusCode, 502); assert.equal(settled, 0);
+  const good = createCompetitiveSearchHandler({ apiKey: "fixture", fetchImpl: async () => ({ ok: true, json: async () => validData }),
+    logTelemetry() { throw new Error("sink unavailable"); } });
+  const result = mockResponse(); await good(req, result); assert.equal(result.statusCode, 200); assert.equal(settled, 1);
+});
 
 test("only URLs returned by web search sources become candidates", () => {
   const result = verifiedCompetitiveResults(validData, "medalisalon.com");
@@ -68,13 +116,44 @@ test("authenticated search uses existing key, bounds calls, and caches identical
   } });
   const req = { auth: { userId: "user-1" }, body: { queries: ["peluqueria Pueblo Libre"], siteDomain: "medalisalon.com" } };
   const first = mockResponse();
-  await handler(req, first);
+  await handler(budgeted(req), first);
   assert.equal(first.statusCode, 200);
   assert.equal(first.body.results.length, 1);
   const second = mockResponse();
-  await handler(req, second);
+  await handler(budgeted(req), second);
   assert.equal(calls, 1);
   assert.deepEqual(second.body, first.body);
+});
+
+test("simultaneous identical requests share one provider call", async () => {
+  let calls = 0;
+  const handler = createCompetitiveSearchHandler({ apiKey: "fixture", fetchImpl: async () => {
+    calls++;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    return { ok: true, json: async () => validData };
+  } });
+  const req = { auth: { userId: "user-1" }, body: { queries: ["peluqueria Pueblo Libre"], siteDomain: "medalisalon.com" } };
+  const first = mockResponse(), second = mockResponse();
+  await Promise.all([handler(budgeted(req), first), handler(budgeted(req), second)]);
+  assert.equal(calls, 1);
+  assert.equal(first.statusCode, 200);
+  assert.deepEqual(second.body, first.body);
+});
+
+test("simultaneous provider failure releases both waiters and permits a later retry", async () => {
+  let calls = 0;
+  const handler = createCompetitiveSearchHandler({ apiKey: "fixture", fetchImpl: async () => {
+    calls++;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    throw new Error("fixture provider failure");
+  } });
+  const req = { auth: { userId: "user-1" }, body: { queries: ["software"], siteDomain: "business.test" } };
+  const first = mockResponse(), second = mockResponse();
+  await Promise.all([handler(budgeted(req), first), handler(budgeted(req), second)]);
+  assert.equal(calls, 1);
+  assert.equal(first.statusCode, 502); assert.equal(second.statusCode, 502);
+  await handler(budgeted(req), mockResponse());
+  assert.equal(calls, 2);
 });
 
 test("unauthenticated requests and invalid domains do not call the provider", async () => {
@@ -90,7 +169,7 @@ test("unauthenticated requests and invalid domains do not call the provider", as
 test("provider errors do not become invented results", async () => {
   const handler = createCompetitiveSearchHandler({ apiKey: "test-key", fetchImpl: async () => ({ ok: false, status: 429 }) });
   const response = mockResponse();
-  await handler({ auth: { userId: "user-1" }, body: { queries: ["peluqueria Pueblo Libre"], siteDomain: "medalisalon.com" } }, response);
+  await handler(budgeted({ auth: { userId: "user-1" }, body: { queries: ["peluqueria Pueblo Libre"], siteDomain: "medalisalon.com" } }), response);
   assert.equal(response.statusCode, 502);
   assert.equal(response.body.results, undefined);
 });

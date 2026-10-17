@@ -1,0 +1,118 @@
+ZENTRA AI — RELEASE CANDIDATE LOCAL DE PRODUCCIÓN
+17/10/2026 — NO APTO PARA PUBLICACIÓN HASTA CERRAR LOS BLOQUEOS
+
+1. IDENTIDAD Y AISLAMIENTO
+
+Rama: release/zentra-ai-v1-rc-20261017, sin upstream.
+Worktree: outputs/zentra-ai-v1-rc-backend, separado del checkout original.
+Base: origin/main = 5adc7635f69042fe8cf343e756033c192f25bead, no el main local atrasado.
+Referencia funcional STAGING: d41867d64cfee0ea74938407b1164119e9fa10aa.
+SHA candidato backend: obtener con git rev-parse HEAD; el informe externo registra el commit final.
+
+Extensión: outputs/zentra-ai-v1-rc-extension, repo local separado, sin remotos.
+Fuente: 0a3f3452f5f593bcb4125a9c19a7f1e9e9ed778d.
+Commit extensión: 28abd31acd63169c4e7db0242e882b227318b993.
+Versión propuesta: 1.0.3, pendiente de confirmar contra la versión publicada real.
+ZIP: outputs/Zentra_AI_1.0.3_PRODUCTION_RC_NOT_FOR_PUBLICATION.zip.
+SHA-256 ZIP: dd1690256b571c569db3b6550a81c9f560ae01052801c65834ea14e26df1c682.
+51 archivos runtime/assets; hashes individuales en provenance.json.
+No se instaló, subió ni publicó. No cargar esta candidata sobre el ID del laboratorio.
+
+main, staging, sus archivos originales y los cambios ajenos no se sobrescribieron. No hubo push a ninguna rama. Zentra Audit independiente no se leyó, modificó, probó ni empaquetó.
+
+2. RECONCILIACIÓN, NO MERGE CIEGO
+
+La previsión de merge detectó cuatro conflictos reales:
+- server.js: contenido.
+- release-competitive-search.js: add/add.
+- release-competitive-search.test.js: add/add.
+- release-audit-json.js: add/add.
+
+Se integraron archivos runtime seleccionados del estado aprobado, no los 29 commits como un merge integral. Los SQL de STAGING y sus fixtures/artefactos de desarrollo no se arrastraron como migraciones listas para producción.
+El candidato desciende de main y conserva en su historia los tres commits exclusivos de producción. El inventario de los 29 commits STAGING y su procedencia está en provenance.json.
+
+Resoluciones explícitas:
+- Search conserva el endpoint autenticado, las fuentes verificadas y la instrucción de priorizar la actividad principal de producción. Se usa el sucesor aprobado con presupuesto durable y deduplicación. Sus pruebas productivas están conservadas/adaptadas al presupuesto mock, sin proveedores.
+- Recuperación JSON usa el validador confiable aprobado, manteniendo la API inspectAuditJson y el allowlist de finish reasons de producción. El test productivo original de recuperación queda intacto y pasa: una regeneración máxima, degradación segura, concurrencia y logs sin secretos.
+- server.js integra identidad/backend-authoritative, operaciones/reservas, recuperación, evidencia conversacional/tickets, P0, QA-012, AM/PM y SEO/PDF aprobados. El catálogo Lemon y PLAN_LIMITS son byte a byte los de main. No se cambiaron enlaces, precios ni los cupos comerciales base.
+- Se preservaron explícitamente los defaults técnicos premium_pdf_used de main: Pro 30, Agency 80. STAGING usa 10/30 y su SQL también. Esta diferencia NO se resolvió inventando otra cuota: queda pendiente de leer el esquema y definir el contrato productivo antes de desplegar. No se preparó una migración de cuotas.
+
+Los cambios de base de datos y de billing nuevos tienen dependencias operativas que no pueden certificarse sólo con fuentes. Este commit no significa autorización para ejecutarlos.
+
+3. AISLAMIENTO DEL MODO TEST
+
+En el backend candidato:
+- hasUnlimitedAgencyOverride devuelve false incondicionalmente.
+- No se incluye la lista de correos de test.
+- Un campo user.unlimited_agency no activa el formateo/cupo ilimitado.
+- Operaciones, reservas y resolución de audio reciben la política cerrada del servidor.
+- Tampoco existe el bypass de asociación de billing para la cuenta manual STAGING, aunque se manipulen las variables para parecer ese entorno.
+- No hay variable de entorno, body, query, plan declarado o flag de cliente que habilite la excepción en este artefacto.
+
+En el paquete público:
+- debugUnlimitedFree y debugPlanOverride no participan en la resolución.
+- unlimited_agency se normaliza a false; no se muestra Modo test ni cupos de test.
+- El PDF prioriza el entitlement reservado; la excepción visual Agency test queda fuera.
+- Se retiraron zentra-dev-flags.js y su script tag; las comprobaciones de debug internas quedan deshabilitadas en el artefacto.
+
+La rama STAGING original no fue modificada: se comprobó offline que su función aprobada sigue reconociendo su cuenta autorizada. No se trasladaron datos ni excepciones al proyecto productivo.
+
+Límite de esta afirmación: es una garantía del candidato de código, no una certificación del Supabase Live. Antes de publicar sigue siendo obligatorio comprobar grants/RLS y que los RPC con parámetros privilegiados no puedan ejecutarse con anon/authenticated. El navegador está bloqueado; no se ha verificado ese dato real.
+
+4. PAQUETE WEB PÚBLICO
+
+- Backend y fallbacks: exclusivamente https://zentra-backend-v2.onrender.com.
+- Supabase: https://ohakwaihhuenpensoedh.supabase.co y la misma clave publicable de la copia clean, sin mostrarla. La asociación real de esa clave al proyecto sigue pendiente de dashboard; no es un JWT decodificable.
+- Confirmación de cuenta y enlaces comerciales conservados. No se modificó Auth real ni SMTP.
+- Sin endpoints STAGING, scripts de debug, bridge Desktop, polling local, token de bridge, alarms ni orígenes localhost/http/ws de desarrollo.
+- Modo Trabajo conserva work-window-controller.js y los eventos oficiales Chrome, sin dependencia del bridge Desktop.
+- Permisos iguales a la copia clean: activeTab, tabs, storage, scripting, downloads; host_permissions <all_urls>. CSP productiva conservada.
+- Transporte/UI de transcripción experimental excluidos. No se cambió ni activó la feature backend, ni el audio normal existente.
+- Se conserva audit-crawl-security.js de la copia productiva: ownership, presupuesto por sesión, cache acotada, cancelación local, URL/origen y redirects. El emisor admite sólo popup.html o popup.html?mode=work del propio ID, no páginas externas. El cliente inicia el guard sólo tras una reserva válida y lo cierra al finalizar/perder autorización.
+- Historial continuo, 11 guardadas, restauración y almacenamiento mantienen sus claves; no se leyó ni reescribió el storage real de ningún usuario. El nombre interno IndexedDB con staging se conserva por compatibilidad, no contiene endpoint de red.
+- Los assets llamados zentra-audit-logo son imágenes ya utilizadas por el indicador SEO/chat de Zentra AI; no son un paquete de la app independiente.
+- ZIP generado con git archive del commit de extensión. No contiene .git, tests, docs, node_modules, credenciales privadas, .DS_Store o recursos de desarrollo. Se contrastó el contenido de cada entrada con su fuente.
+
+5. COMPATIBILIDAD Y PRUEBAS FOCALIZADAS
+
+Pruebas nuevas: 22 casos sobre política production, STAGING conservado, autoridad de cuatro planes, spoofing, tokens ajenos, binding de suscripciones, firma webhook, manifest/orígenes/imports, límites PDF, storage y guard de crawl en ambos modos, transporte y builder.
+Pruebas heredadas focalizadas: 7 de recuperación JSON y 13 de Search. Ninguna realiza llamadas reales.
+Total aprobado: 42/42 (22 nuevas, 7 JSON productivas y 13 Search focalizadas).
+Se comprobó además el arranque local aislado: /health 200 y /api/chat sin sesión 401, sin credenciales Supabase/proveedor. Se reutilizaron por symlink dependencias ya instaladas; esto NO certifica un npm ci limpio ni acceso Live a DB/modelos.
+26 archivos JS principales de la extensión pasan node --check.
+No se repitieron suites generales ni auditorías reales.
+
+Comando focal desde el worktree backend:
+ZENTRA_PREVIOUS_CLIENT=/ruta/a/zentra-ai-chrome-store-clean node --test release-audit-json.test.js release-competitive-search.test.js release-candidate/tests/production-candidate.test.mjs
+
+BLOQUEO DE COMPATIBILIDAD DEMOSTRADO:
+El cliente candidato produce el root SEO exacto autorizado por el nuevo builder. La copia clean anterior NO: su prompt difiere. Con scope y origen válidos, prepareAuditStep la rechaza antes de registrar/proveer. El test aprueba el rechazo seguro, NO declara compatible a esa versión.
+No se relajó el contrato ni se aceptaron instrucciones privilegiadas de un cliente viejo. Hay que identificar el ZIP realmente publicado y decidir una compatibilidad versionada segura o un cutover específico, bajo autorización separada. No es seguro asumir que todos actualizarán Chrome al mismo tiempo.
+
+6. BLOQUEOS QUE IMPIDEN PUBLICAR
+
+1) Render/Supabase producción sin inspección Live: control de navegador deshabilitado en Work. Pendientes SHA Live, deploy ID para rollback, Auto-Deploy, rama/servicio efectivos, runtime/build/predeploy y proyecto/roles/esquema/backups/Auth/SMTP.
+2) Compatibilidad de cliente previo: fallo demostrado en copia local; paquete publicado real/ID/versión desconocidos. No se puede prometer rollback con clientes mixtos sin resolverlo.
+3) Cuentas pagas y checkout: bindings verificados, relaciones store/customer/subscription/Auth, vencimientos y puntos de entrada públicos no inspeccionados. La reconciliación nueva falla cerrada; no modifica planes para ocultar un vínculo ausente.
+4) Cupo técnico PDF main 30/80 versus SQL/STAGING 10/30: preflight DB y decisión explícita antes de cualquier migración. Base Free/Starter/Pro/Agency 20/1, 300/5, 800/10, 3000/30 y profundidad 3/5/7/11 preservadas.
+5) Store: confirmar item/ID existente, versión mayor válida, privacidad y clave pública de producción. 1.0.3 es candidata, no una versión certificada disponible.
+6) Consumidores compartidos: el servidor conserva rutas product=audit ya existentes, pero no se inspeccionó ni adaptó la app independiente por estar fuera de alcance. Antes de desplegar hay que acreditar que el cutover no la afecta, o autorizar un aislamiento de destino; no asumirlo por no editar su carpeta. Esta parte queda detenida.
+
+No se ejecutó ningún SQL. production-schema-preflight.READ-ONLY.sql es un guion opcional de catálogos con BEGIN READ ONLY/ROLLBACK; no se carga desde la app, start o deploy. No llama a zentra_access, consume, recovery ni otros RPC mutantes. Las cantidades/vínculos pagados requieren una inspección posterior segura y sin datos personales.
+
+7. PLAN DE DEPLOY Y ROLLBACK — NO EJECUTAR AHORA
+
+A) Recuperar sólo lectura a dashboards y cerrar los bloqueos. Comprobar Auto-Deploy ANTES de publicar cualquier ref remota. Si está ON, pedir permiso específico para control manual; no cambiarlo por cuenta propia.
+B) Conocer SHA/deploy ID Live real y disponibilidad de rollback. No asumir que origin/main o un SHA anterior de STAGING es la versión productiva.
+C) Comparar definiciones/RPC/grants y suscripciones existentes; si falta schema/binding, presentar un delta compatible y autorización aparte. No copiar DB ni slots/consumo STAGING. No reaplicar release-guard sobre Lemon o cambiar cuotas a ciegas.
+D) Resolver convivencia de la versión publicada y la candidata sin rebajar confianza del builder. Publicar revisión de candidato/SHA si hace falta; no reutilizar este commit sin esa revisión.
+E) Sólo con nueva autorización: backup/restaurabilidad verificados, ventana sin operaciones/leases activos, push normal del SHA exacto a la rama aprobada y deploy manual al servicio de producción. Sin force push, sin tocar registros Search históricos. /health sólo verifica vida de proceso.
+F) Tras Live/SHA/health/logs: validación mínima explícitamente autorizada y revisión Store con publicación diferida. No instalar, subir o publicar este ZIP ahora.
+
+Rollback:
+- Render al deploy exitoso anterior real, con Auto-Deploy controlado para evitar reinstalar el cambio fallido.
+- Mantener compatibilidad con ambos clientes/esquemas; un rollback de código no revierte DB, variables ni pagos. Si el backend viejo no entiende los datos nuevos, NO usar rollback sin plan adicional.
+- No borrar recibos/tablas, resetear cuentas o restaurar backups sobre pagos nuevos automáticamente.
+- Store: verificar rollback nativo disponible para el item o preparar versión correctiva superior. Mantener mismo ID y storage; nunca desinstalar o borrar historial como rollback.
+
+Fuera de alcance: Zentra Audit independiente, Desktop, Inbox, migraciones ejecutadas, pagos, datos reales, despliegues y publicaciones. El informe final externo contiene el SHA backend resultante y la comprobación de que los originales permanecieron intactos.

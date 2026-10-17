@@ -1,0 +1,450 @@
+{
+  "status": "LOCAL_CANDIDATE_NOT_AUTHORIZED_FOR_DEPLOYMENT",
+  "date": "2026-10-17",
+  "branch": "release/zentra-ai-v1-rc-20261017",
+  "backendBase": "5adc7635f69042fe8cf343e756033c192f25bead",
+  "backendReference": "d41867d64cfee0ea74938407b1164119e9fa10aa",
+  "stagingSourceCommits": [
+    {
+      "sha": "1a902cc0e79721513435a57d6ab2e33db29f5e8e",
+      "subject": "Prepare approved Zentra backend snapshot and staging handoff"
+    },
+    {
+      "sha": "13ee8df29290e27790e31fd4cd07b4c8391d79bf",
+      "subject": "staging: improve HTTP 429 observability"
+    },
+    {
+      "sha": "fdfb8e321e36d46a0273e93eb752643e86d65e98",
+      "subject": "staging: align audit search routing and refiner telemetry"
+    },
+    {
+      "sha": "5f902d58d6054b85e5addf55c08d91a5df6bd6e1",
+      "subject": "staging: isolate status rate limits and verify usage refresh"
+    },
+    {
+      "sha": "3cbfe8ad98372817fd0701c10f32edaf31734aff",
+      "subject": "staging: validate chat persistence and resume lifecycle"
+    },
+    {
+      "sha": "99663468469ce9f69bc7d22a3d61db47661e90a7",
+      "subject": "staging: allow isolated manual plan fixture without Lemon binding"
+    },
+    {
+      "sha": "17a502a5d9e6a854f717f3a902b510050eeb9565",
+      "subject": "staging: release failed executive premium refinement safely"
+    },
+    {
+      "sha": "088150363559f11329edd2fa9982f5b4dc07c9ae",
+      "subject": "staging: raise executive ceiling and terminalize search uncertainty"
+    },
+    {
+      "sha": "19daa2eb7a6c33e24286de60d52eda46ea975465",
+      "subject": "staging: use high reasoning for executive refiner"
+    },
+    {
+      "sha": "4df554ea889ff0e69fb187ba376df146da391bb7",
+      "subject": "staging: align executive reasoning with validated xhigh flow"
+    },
+    {
+      "sha": "d6629d91abc991ef5146d27140e5aee3d8c96465",
+      "subject": "staging: raise premium reasoning ceiling and refund failed stages"
+    },
+    {
+      "sha": "2ce483329fb385d03f8e211f4c2db3b3cef4c920",
+      "subject": "staging: recover partial executive refinement without replaying Sol"
+    },
+    {
+      "sha": "590f8dfaf92282ac7e10027e153203b4768ab80f",
+      "subject": "staging: validate real pipeline progress and capacity website links"
+    },
+    {
+      "sha": "2a38bc0c6cbed924f54f5752726d8c16e600ff9f",
+      "subject": "staging: activate Free Launch boundaries"
+    },
+    {
+      "sha": "1d26f681d256a74953128a8dec22969eedd8e8f9",
+      "subject": "staging: preserve untrusted conversation evidence in authorized chat"
+    },
+    {
+      "sha": "a71dd4674bb857820e5181451aeae34a92c4a72e",
+      "subject": "feat(staging): add guarded conversation audio transcription fallback"
+    },
+    {
+      "sha": "130c5cc7312932eb900994be2d236b62c54d08ba",
+      "subject": "fix(staging): preserve chat continuity and active contact identity"
+    },
+    {
+      "sha": "ec23ed0bd5d280dccb2077026d7f70183bea3944",
+      "subject": "fix(staging): share effective entitlement with conversation audio"
+    },
+    {
+      "sha": "9e8fa7e623caf2d13ec682b70229801e26729863",
+      "subject": "fix(staging): separate chat intent from transcript evidence"
+    },
+    {
+      "sha": "05cfa09aed62ddf05df7f16815a40d524b5920a4",
+      "subject": "fix(staging): preserve chat intent, identity scope and response format"
+    },
+    {
+      "sha": "1f517cfb84a27621c8b00aef46b1a125f8b129df",
+      "subject": "fix(staging): preserve active Zoho ticket evidence in chat"
+    },
+    {
+      "sha": "2042ab3d070f62df1ae6c9251d42641b2ca0c1a7",
+      "subject": "fix(staging): preserve Respond private comments as chat evidence"
+    },
+    {
+      "sha": "f9cb17a096b0649905c27d51bd9a54d25964c21c",
+      "subject": "fix(staging): preserve observed Respond history and support status"
+    },
+    {
+      "sha": "bb991f363c9cc0b4372aea21fd094e7a48aa3c0f",
+      "subject": "test(staging): record validated Respond SPA observer correction"
+    },
+    {
+      "sha": "ee439a6237a5fb0991feecf2f08b7d47356a5c1f",
+      "subject": "STAGING: sincronizar detector contextual P0 autorizado"
+    },
+    {
+      "sha": "26b59ea8c5458019001e3b5088e276d7fb545b80",
+      "subject": "STAGING v1: evidencia verificable y reglas internas de soporte"
+    },
+    {
+      "sha": "767c79cf016875dd61d3a03c200a680fcaa2dfcb",
+      "subject": "fix(staging): add authenticated read-only chat recovery status"
+    },
+    {
+      "sha": "b656dd7677c235a82155fc2003816c5a88804cc0",
+      "subject": "checkpoint(staging): preserve case intent and visual schedule evidence"
+    },
+    {
+      "sha": "d41867d64cfee0ea74938407b1164119e9fa10aa",
+      "subject": "fix(staging): qualify SEO evidence and cover PDF plan presentation"
+    }
+  ],
+  "productionSourceCommits": [
+    {
+      "sha": "8f45819d53703fa194f5303c06acd3198ba36686",
+      "subject": "Add authenticated competitor search endpoint for audits"
+    },
+    {
+      "sha": "622695bfbdce547f7717f8aa70e103e71f27c8ba",
+      "subject": "Prefer primary business activity in Audit competitor search"
+    },
+    {
+      "sha": "5adc7635f69042fe8cf343e756033c192f25bead",
+      "subject": "Recover consultative Audit JSON within one backend request"
+    }
+  ],
+  "extensionReference": "0a3f3452f5f593bcb4125a9c19a7f1e9e9ed778d",
+  "extensionCandidate": "28abd31acd63169c4e7db0242e882b227318b993",
+  "publicPackage": {
+    "filename": "Zentra_AI_1.0.3_PRODUCTION_RC_NOT_FOR_PUBLICATION.zip",
+    "version": "1.0.3",
+    "sha256": "dd1690256b571c569db3b6550a81c9f560ae01052801c65834ea14e26df1c682",
+    "files": [
+      {
+        "file": "ai-provider.js",
+        "sha256": "aa93f5895df9025e28e082762602194741f668cc87125612586943b015dbdf87"
+      },
+      {
+        "file": "audit-crawl-security.js",
+        "sha256": "e5d8fb8c56ec4a9616f6210f1b4b6864b87d8701aff796b090d82138273f4b99"
+      },
+      {
+        "file": "auth-errors.js",
+        "sha256": "07d639cf18a523dbfe28f2f8734cff3916ac34fb71027928f14df77fa1bc30c6"
+      },
+      {
+        "file": "background.js",
+        "sha256": "24daedd432f65ce15f24ca47fd3199654bda843730486dcf289b9eff0d727596"
+      },
+      {
+        "file": "chat-draft-store.js",
+        "sha256": "b05566f7a44f528ae0205c2197216066fc4aefdf2622f065e3636e108027427d"
+      },
+      {
+        "file": "chat-layout.js",
+        "sha256": "508107c13147ecde22c1815cc93b4e27be14ae82874d51707dfade5cff45a44c"
+      },
+      {
+        "file": "chat-send-animation.css",
+        "sha256": "73a1f85cf69bdb950ca4c7669ea9d8062be1b9f7090ef6d5717a7d7ab4832363"
+      },
+      {
+        "file": "chat-send-animation.js",
+        "sha256": "e13c095ef1a38fd323a1064ebe04e0019f722d7cbc0cdb518dad4820201502e0"
+      },
+      {
+        "file": "claude-chatbot.js",
+        "sha256": "297afe365a5922a01c887e3b53ec9f56641b8afb78d5ca28aba85847fa5c6f23"
+      },
+      {
+        "file": "claude-integration.js",
+        "sha256": "0eded80f49fb50a63f4140ed6630c2b5a2a93a322ecdd073c5569f3b24e54d7a"
+      },
+      {
+        "file": "claude-pdf-generator.js",
+        "sha256": "667b4a769904cda2618de8402545ef38d9fb43c75144b0d3a7a900764652c4a0"
+      },
+      {
+        "file": "content.js",
+        "sha256": "4b623a86f627db6f4497470431d7d142349232182a1b1f55c1e388d3cf4629c7"
+      },
+      {
+        "file": "conversation-context.js",
+        "sha256": "7fbc8657665c9c205f9348b8c211d6e2fe72eaf7a697948208b9635609fcfe64"
+      },
+      {
+        "file": "display-mode.css",
+        "sha256": "ad223bf799db3395e4ce0089e83f806b6be0063ec1dc96be48ec5f61245fa7bd"
+      },
+      {
+        "file": "display-mode.js",
+        "sha256": "1a5735476eb8b19c21353005f3221f489a7a05602845c821b0ad611cd159732a"
+      },
+      {
+        "file": "environment-understanding/context-object-builder.js",
+        "sha256": "6b0b35240668fd5e729735e55985e140c094b859cf7d92e08f228c653b126489"
+      },
+      {
+        "file": "environment-understanding/context-utils.js",
+        "sha256": "211b7d2b7aaac9b99e2132b4474ff85a7a6538fa10196cfe3207613b3e41139f"
+      },
+      {
+        "file": "environment-understanding/environment-detector.js",
+        "sha256": "58ecfe6ee26cbceb245f5c1376261a611f18d775099f08d6f91c5101b3a0f96b"
+      },
+      {
+        "file": "environment-understanding/platform-adapters/google-ads-adapter.js",
+        "sha256": "c0b105e7cc1cc3f8177ab42d035d6fddb0f07665c78a014e25acb1967bcafae1"
+      },
+      {
+        "file": "environment-understanding/platform-adapters/meta-ads-adapter.js",
+        "sha256": "8641d21b3e3afe9d1f2cfa94812e3db42edde1fe2b83ed779f91c6667a9aaf5c"
+      },
+      {
+        "file": "environment-understanding/platform-adapters/search-console-adapter.js",
+        "sha256": "ffedeccdaabcc5401bb0e9858fc0c5858d456cc0319b46a21b23ac3152709f1a"
+      },
+      {
+        "file": "environment-understanding/section-detector.js",
+        "sha256": "18bbbd9cbb22151ad41138b446e64462e246c85db0f65b99aa5cd2bba0f442e8"
+      },
+      {
+        "file": "extras-local.js",
+        "sha256": "a3a5e4007a6fff8beb64213134a23c92d6d556c88e98c4b313ade4fdbf92706e"
+      },
+      {
+        "file": "extras-tools.js",
+        "sha256": "b1e12e00a17b8b893c6e34d5f74d9315cd4e3506b99dd5e4477913e5ba785cb3"
+      },
+      {
+        "file": "free-launch-ui.js",
+        "sha256": "667b2496807d75362186b2fde78692570943e119c5e005e17ee84911e5b46bda"
+      },
+      {
+        "file": "image-downloader.js",
+        "sha256": "ab10df624eb86ea34e1e88ba3e37655c2346054e19269cdb5dca2e091a4cf009"
+      },
+      {
+        "file": "images/favicon-dark.png",
+        "sha256": "ff2f4167cf449b85505e4ce4f2cde90b5c8541a514f8c4165cd54c38ee12873f"
+      },
+      {
+        "file": "images/favicon-light.png",
+        "sha256": "7033ec2c53c1ac9d5df0a3a9e05c4ace5b6e22f41211f61068a433a580b968aa"
+      },
+      {
+        "file": "images/icon128-dark.png",
+        "sha256": "764ca95dbacbbefd18c65f14abf2ee65038d200ee7c2b98796f9d20ceb72f392"
+      },
+      {
+        "file": "images/icon128.png",
+        "sha256": "00e7db5da50ce5266416737e58b676993c2dedc3187c4c58a014209ab7979af1"
+      },
+      {
+        "file": "images/icon16.png",
+        "sha256": "e49ed9b7158d7ffa11168a6469e407c605ba1152c2594e3f113af5698ebf7b61"
+      },
+      {
+        "file": "images/icon48.png",
+        "sha256": "b114ecaf8fe209b05d3e1320c493c6c3e44ee239cedf4d0776d082bb65abbc86"
+      },
+      {
+        "file": "images/logo-dark.png",
+        "sha256": "06412e86295efd79a7f651204ee259ecf7c42422513300430b3941bf5d8b9f28"
+      },
+      {
+        "file": "images/logo-light.png",
+        "sha256": "b9c63d8b42d265bff51d5763a32d60043e05af6d37a64c859ae86e5214ff0ecb"
+      },
+      {
+        "file": "images/zentra-audit-logo-dark.png",
+        "sha256": "fead1985eb12f86972d399b1df89840a1b6ce64b516eeec122bfe31abe23852d"
+      },
+      {
+        "file": "images/zentra-audit-logo-light.png",
+        "sha256": "488cd37b61dd6f87370a7e3bb10aa04fb3710e2465412d4feaea579bb8eeee23"
+      },
+      {
+        "file": "lib/jspdf.umd.min.js",
+        "sha256": "98ccf17aa10c20bb1301762618fcc9b6ab3a4e7f26b6071d64d0b41154df3875"
+      },
+      {
+        "file": "lib/lucide.min.js",
+        "sha256": "efc8ebf1862ab558c779f6609b4b642626a9b5bcc351a75ad996585b63e22028"
+      },
+      {
+        "file": "lib/supabase.min.js",
+        "sha256": "5bd4bfea6e2408fae6f9100ea7f0f024b030644319de7525ec5358375161b126"
+      },
+      {
+        "file": "local-pdf-generator.js",
+        "sha256": "ea78619fd7b0b55f204ed5c9d3b6c2cfd42c57d222baed88445dd52cf8a8029c"
+      },
+      {
+        "file": "manifest.json",
+        "sha256": "e34b2d4fd412ff886593f35ba47da1a67bc99f47cb8e25270dffcf0afb530144"
+      },
+      {
+        "file": "model-router.js",
+        "sha256": "bfd229638768bcc81b3e84c77082511f327e51e39514338f267336e17e1af0b6"
+      },
+      {
+        "file": "popup.css",
+        "sha256": "59545bb3a2be3d23f19d6daca1824028532932124a1cf0db806e40ad5852b570"
+      },
+      {
+        "file": "popup.html",
+        "sha256": "6cde2fde01d4028d219e6f72487fe0f5a33e8d1b644ae1a5ad080c203ef5503b"
+      },
+      {
+        "file": "popup.js",
+        "sha256": "15f0504de2339ec5adf94d6d9e7d33c37094ae2b51182034629f0c02c81ba282"
+      },
+      {
+        "file": "seo-workspace-ui.js",
+        "sha256": "7a4f82a135af91e05305731562301328adfb33a9a7e21c90f33909fafafffc3b"
+      },
+      {
+        "file": "strategy-model-selector.js",
+        "sha256": "d87ef1cb64d90f638bbcf6ffa80e81e98815527743899ab94312f5c032099e1b"
+      },
+      {
+        "file": "subscription-manager.js",
+        "sha256": "665c7b1659daadd919932b8c8bf34d1b0a79035f51ae944c16d2ea03074a682f"
+      },
+      {
+        "file": "supabase.js",
+        "sha256": "7c13dcc6e37c0fc884a9073b845075aee208461fb461bb03191fa29f20fdbe85"
+      },
+      {
+        "file": "work-window-controller.js",
+        "sha256": "4f73aff1574788485482d0a92637232244a7f85c593126f0f666ce28655724da"
+      },
+      {
+        "file": "zentra-api-client.js",
+        "sha256": "d5380f2483c812a09b3a20d1532b1aff9c80f10dd6fdc0beb351e23f483b5678"
+      }
+    ],
+    "installed": false,
+    "submitted": false,
+    "published": false
+  },
+  "conflicts": [
+    {
+      "file": "server.js",
+      "resolution": "Reviewed approved staging server integration on main base, preserving main catalog/base/premium defaults; production override is unconditionally disabled."
+    },
+    {
+      "file": "release-competitive-search.js",
+      "resolution": "Approved durable Search successor preserves production endpoint, verified sources and primary business activity."
+    },
+    {
+      "file": "release-competitive-search.test.js",
+      "resolution": "Staging successor retains production assertions and mocks the required durable budget."
+    },
+    {
+      "file": "release-audit-json.js",
+      "resolution": "Approved single trusted validator plus production inspectAuditJson API/safe finish reasons; original production tests retained byte-for-byte."
+    }
+  ],
+  "releaseOnlyChanges": [
+    "No production unlimited allowlist, unconditional false server policy, no user.unlimited_agency bypass",
+    "No production manual billing fixture even when env impersonates staging",
+    "No debug/test UI behavior, no staging endpoints in public extension",
+    "No Desktop bridge/alarms/development origins; Chrome work window retained",
+    "Production crawl ownership/cache/redirect/URL guards retained; trusted work window supported",
+    "Local read-only schema preflight only; no migration delta executed"
+  ],
+  "preserved": {
+    "commercialCatalog": "byte-identical to origin/main",
+    "baseQuotas": "byte-identical to origin/main",
+    "premiumBackendDefaults": {
+      "pro": 30,
+      "agency": 80
+    },
+    "savedChatCapacity": 11,
+    "storageKeys": "preserved; no user storage read or mutated",
+    "stagingAndMain": "unchanged"
+  },
+  "excluded": {
+    "uncommittedOriginalChanges": true,
+    "migrations": [
+      "supabase-conversation-audio-entitlement-staging.sql",
+      "supabase-conversation-audio-staging.sql",
+      "supabase-execution-guard.sql",
+      "supabase-executive-recovery.sql",
+      "supabase-executive-refiner.sql",
+      "supabase-free-launch.sql",
+      "supabase-http-rate.sql",
+      "supabase-lemon.sql",
+      "supabase-premium-reasoning.sql",
+      "supabase-release-guard.sql",
+      "supabase-search-lifecycle.sql",
+      "supabase-users.sql"
+    ],
+    "independentAuditApp": true,
+    "desktopApp": true,
+    "inboxApp": true
+  },
+  "blockers": [
+    "Production Live SHA/Auto-Deploy/Supabase schema/roles/backups unknown: browser use disabled",
+    "Previous local client SEO root differs from authorized builder; actual published Store artifact/version unknown",
+    "Paid subscription bindings, checkout entrypoints and production account/schema compatibility unverified; no provider or DB inspected",
+    "Production premium_pdf defaults 30/80 vs staging SQL 10/30 require DB comparison and explicit policy; no quota migration prepared",
+    "Store ID/version 1.0.3 eligibility and production public-key association require Live verification",
+    "Shared product=audit consumers remain unverified and out of scope; no deployment may alter them implicitly"
+  ],
+  "checks": {
+    "newFocusedTests": 22,
+    "legacyJsonTests": 7,
+    "searchTests": 13,
+    "isolatedStartup": {
+      "healthHTTP": 200,
+      "unauthenticatedChatHTTP": 401,
+      "credentialsProvided": false,
+      "dependencies": "existing installed node_modules symlink; not a clean npm ci certification"
+    },
+    "zipSourceHashes": 51,
+    "generalSuitesRepeated": false,
+    "providerCalls": 0
+  },
+  "live": {
+    "productionSHA": null,
+    "autoDeploy": null,
+    "supabaseProjectRefExpected": "ohakwaihhuenpensoedh",
+    "supabaseVerified": false,
+    "storeItemID": null
+  },
+  "safety": {
+    "remoteWrites": false,
+    "deploy": false,
+    "sqlExecuted": false,
+    "environmentChanges": false,
+    "realPayments": false,
+    "realAccountOrQuotaChanges": false,
+    "independentAuditAppReadOrModified": false
+  }
+}
