@@ -1,6 +1,20 @@
 {
   "status": "LOCAL_CANDIDATE_NOT_AUTHORIZED_FOR_DEPLOYMENT",
   "date": "2026-10-17",
+  "finalMigrationCheckpoint": {
+    "date": "2026-10-18",
+    "baselineEvidence": "release-candidate/migrations/production-baseline.json",
+    "approvedFreePolicy": {"capacity":100,"individualDays":30,"chatActions":20,"seoAudits":1,"enabledDuringMigration":false},
+    "fullMigrationValidation": {"engine":"PostgreSQL 18.4 local with synthetic Supabase roles","passed":20,"productionExecution":false},
+    "capacityOnlyValidationPassed":3,
+    "singleResultPreflight": "release-candidate/migrations/00-required-catalog-single-result.sql",
+    "preflightOriginalChecksPreserved":7,
+    "preflightOnlyValidationPassed":5,
+    "original42TestsRepeated":false,
+    "remoteWrites":false,
+    "migration01ExecutedThisTurn":false,
+    "deploymentAuthorized":false
+  },
   "closure": {
     "parentCandidate": "22e54eb03ce4eaae5f423c8a83fa26c8fff97265",
     "userConfirmed": {

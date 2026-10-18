@@ -1,0 +1,88 @@
+{
+  "sourceFile": "Supabase Snippet Untitled query.csv",
+  "sourceSha256": "671a3b04a8be0faf99e72b74bf5cbf1f2fcdf4c8fe2dca7c4f4daa37389c4609",
+  "scope": "User-supplied public catalog; no account rows, indexes, defaults, constraints or execution-role evidence",
+  "table": "public.users",
+  "columns": [
+    {
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "column_name": "email",
+      "data_type": "text"
+    },
+    {
+      "column_name": "plan",
+      "data_type": "text"
+    },
+    {
+      "column_name": "plan_type",
+      "data_type": "text"
+    },
+    {
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "column_name": "audit_credits",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "audit_credits_used",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "column_name": "actions_used",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "audits_used",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "premium_chat_used",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "premium_pdf_used",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "billing_cycle_start",
+      "data_type": "bigint"
+    },
+    {
+      "column_name": "extra_actions_balance",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "extra_audits_balance",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "extra_actions_used_cycle",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "extra_audits_used_cycle",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "extra_actions_purchased_total",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "extra_audits_purchased_total",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "purchase_history",
+      "data_type": "jsonb"
+    }
+  ]
+}

@@ -200,4 +200,14 @@ with expected(signature,body_md5) as (values
 ('public.zentra_track_free_receipt()','2c8060c01c760adcfb378079578efcef'))
 select e.signature,case when p.oid is null then 'MISSING' when md5(p.prosrc)<>e.body_md5 then 'DEFINITION_DIFFERS' else 'UNSAFE_GRANTS_OR_SECURITY' end status from expected e left join pg_proc p on p.oid=to_regprocedure(e.signature) where p.oid is null or md5(p.prosrc)<>e.body_md5 or not p.prosecdef or has_function_privilege('anon',p.oid,'EXECUTE') or has_function_privilege('authenticated',p.oid,'EXECUTE') order by e.signature;
 select case when not exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'zentra\_%' escape '\') and not exists(select 1 from pg_tables where schemaname='public' and tablename like 'zentra\_%' escape '\') then 'LEGACY_USERS_ONLY' else 'INSTALLED_OR_PARTIAL_REVIEW_BEFORE_BOOTSTRAP' end baseline;
+-- Visibility/ownership and names across schemas; no function bodies or account rows.
+select current_user as inspection_role,r.rolsuper as is_superuser,r.rolbypassrls as bypasses_rls,
+  has_table_privilege(current_user,'public.users','SELECT') as can_select_users,
+  pg_has_role(current_user,c.relowner,'USAGE') as has_table_owner_rights
+from pg_roles r cross join pg_class c where r.rolname=current_user and c.oid='public.users'::regclass;
+select n.nspname as schema_name,p.proname as function_name,pg_get_function_identity_arguments(p.oid) as arguments
+from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
+where left(p.proname,7)='zentra_' order by 1,2,3;
+select conname,pg_get_constraintdef(oid) as definition from pg_catalog.pg_constraint where conrelid='public.users'::regclass order by conname;
+select indexname,indexdef from pg_catalog.pg_indexes where schemaname='public' and tablename='users' order by indexname;
 rollback;

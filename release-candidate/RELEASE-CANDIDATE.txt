@@ -2,6 +2,11 @@ ZENTRA AI — RELEASE CANDIDATE LOCAL DE PRODUCCIÓN
 17/10/2026 — NO APTO PARA PUBLICACIÓN HASTA CERRAR LOS BLOQUEOS
 
 ADENDA DE CIERRE — prevalece sobre el diagnóstico histórico de abajo:
+Checkpoint de migración 18/10: baseline CSV20 validado; 20 pruebas locales de
+migración, Free aprobado 100/30 días/20 acciones/1 auditoría, OFF durante migración.
+Preflight recomendado: 00-required-catalog-single-result.sql, los siete resultados
+originales en una fila JSON; 5 pruebas focalizadas de equivalencia aprobadas.
+No se ejecutó SQL en producción ni se publicó ninguna ref remota.
 El propietario confirmó primera publicación Store, sin clientes externos,
 Desktop fuera del lanzamiento, Live main 5adc763/Auto-Deploy OFF y proyecto
 ohakwaihhuenpensoedh, sin las dos tablas de asociaciones Lemon.

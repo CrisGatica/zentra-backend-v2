@@ -30,14 +30,38 @@ begin
   end if;
   if to_regclass('public.users') is null then raise exception 'Expected legacy public.users baseline is missing'; end if;
   if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname<>'public' and left(p.proname,7)='zentra_') then
+    raise exception 'Zentra RPCs exist outside public; inspect before installing duplicate implementations';
+  end if;
+  if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname='public' and p.proname like 'zentra\_%' escape '\')
     or exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
       where n.nspname='public' and c.relkind in ('r','p')
       and c.relname like 'zentra\_%' escape '\' and c.relname<>'zentra_ai_schema_releases') then
     raise exception 'Partial/unknown Zentra schema: stop; use 00-required-catalog.sql to prepare only the missing delta';
   end if;
-  if exists(select 1 from (values ('id','uuid'),('email','text'),('plan','text'),
-      ('plan_type','text'),('status','text'),('updated_at','timestamp with time zone')) expected(col,typ)
+  -- Match all 20 existing columns/types from the supplied production catalog.
+  if exists(select 1 from (values
+      ('id','uuid'),
+      ('email','text'),
+      ('plan','text'),
+      ('plan_type','text'),
+      ('status','text'),
+      ('audit_credits','integer'),
+      ('audit_credits_used','integer'),
+      ('updated_at','timestamp with time zone'),
+      ('actions_used','integer'),
+      ('audits_used','integer'),
+      ('premium_chat_used','integer'),
+      ('premium_pdf_used','integer'),
+      ('billing_cycle_start','bigint'),
+      ('extra_actions_balance','integer'),
+      ('extra_audits_balance','integer'),
+      ('extra_actions_used_cycle','integer'),
+      ('extra_audits_used_cycle','integer'),
+      ('extra_actions_purchased_total','integer'),
+      ('extra_audits_purchased_total','integer'),
+      ('purchase_history','jsonb')) expected(col,typ)
       where not exists(select 1 from information_schema.columns c where c.table_schema='public'
         and c.table_name='users' and c.column_name=expected.col and c.data_type=expected.typ)) then
     raise exception 'Legacy users identity/types differ; inspect catalog, do not coerce';
@@ -46,22 +70,9 @@ begin
     raise exception 'Legacy global email uniqueness requires a reviewed schema delta; no automatic drop';
   end if;
   lock table public.users in share row exclusive mode;
+  -- Existing balances/counters are already present: add only the missing identity.
   alter table public.users
-    add column if not exists auth_user_id text,
-    add column if not exists audit_credits integer not null default 0,
-    add column if not exists audit_credits_used integer not null default 0,
-    add column if not exists actions_used integer not null default 0,
-    add column if not exists audits_used integer not null default 0,
-    add column if not exists premium_chat_used integer not null default 0,
-    add column if not exists premium_pdf_used integer not null default 0,
-    add column if not exists extra_actions_balance integer not null default 0,
-    add column if not exists extra_audits_balance integer not null default 0,
-    add column if not exists extra_actions_used_cycle integer not null default 0,
-    add column if not exists extra_audits_used_cycle integer not null default 0,
-    add column if not exists extra_actions_purchased_total integer not null default 0,
-    add column if not exists extra_audits_purchased_total integer not null default 0,
-    add column if not exists purchase_history jsonb not null default '[]'::jsonb,
-    add column if not exists billing_cycle_start bigint not null default (floor(extract(epoch from now())*1000))::bigint;
+    add column if not exists auth_user_id text;
   if exists(select 1 from public.users where auth_user_id is not null
       group by auth_user_id,plan_type having count(*)>1)
     or exists(select 1 from public.users group by email,plan_type having count(*)>1) then
@@ -1354,12 +1365,15 @@ $rc_module_6$;
 
 create table if not exists public.zentra_free_launch_config (
   singleton boolean primary key default true check(singleton),
-  capacity_total integer not null default 300 check(capacity_total>=0),
+  -- Initial capacity approved: 100. Opening still requires separate authorization.
+  capacity_total integer not null default 100 check(capacity_total>=0),
+  -- Individual trial duration; starts only through the existing activation flow.
   access_days integer not null default 30 check(access_days between 1 and 365),
-  enabled boolean not null default true,
+  enabled boolean not null default false,
   activated_total integer not null default 0 check(activated_total>=0)
 );
-insert into public.zentra_free_launch_config(singleton) values(true) on conflict do nothing;
+insert into public.zentra_free_launch_config(singleton,capacity_total,enabled)
+  values(true,100,false) on conflict do nothing;
 
 create table if not exists public.zentra_free_access (
   auth_user_id text primary key,

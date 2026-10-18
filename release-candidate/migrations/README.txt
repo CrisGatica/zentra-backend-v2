@@ -2,13 +2,32 @@ ZENTRA AI v1.0.3 — DELTA PRODUCTIVO LOCAL, NO EJECUTADO
 
 Confirmado por el propietario: main Live 5adc763, Auto-Deploy OFF, proyecto
 ohakwaihhuenpensoedh; 8 cuentas propias de prueba, sin clientes externos.
-Faltantes confirmados: zentra_lemon_customers y zentra_lemon_subscriptions.
-La ausencia de otras columnas/RPC NO se deduce del SHA ni de esas dos tablas.
+Evidencia CSV posterior: una fila TABLA/users, 20 columnas; nombres y tipos
+contrastados contra el fixture local sin diferencias. production-baseline.json
+conserva sólo esos metadatos y el SHA256 del CSV (sin cuentas ni secretos).
+Delta users: 14 columnas faltantes (Auth + billing/Lemon). No se vuelven a agregar
+los contadores ya existentes. El instalador verifica los 20 tipos antes de editar.
+No hay objetos zentra_* en public según la consulta aportada por el propietario;
+el CSV no acredita rol, índices/restricciones ni implementaciones en otros esquemas.
+00 también comprueba esos datos mínimos. Nunca se infiere ausencia por visibilidad
+limitada. El cliente backend usa public por defecto, sin redirección de esquema;
+sus handlers JS llaman a RPC, no los implementan ni instalan automáticamente.
 
 ORDEN Y CONDICIONES
+Forma recomendada en Supabase SQL Editor: abrir el proyecto productivo
+ohakwaihhuenpensoedh, rol postgres, pegar y ejecutar COMPLETO
+00-required-catalog-single-result.sql. Conserva las siete consultas originales de
+00-required-catalog.sql sin cambios y las devuelve en UNA fila JSON preflight_result.
+Copiar la celda completa o exportar su CSV de una fila; no basta una captura parcial.
+Debe indicar read_only=true y result_sets=7. LEGACY_BASELINE_COMPATIBLE permite
+continuar con la autorización de migración (no la ejecuta ni autoriza por sí solo).
+STOP_REVIEW, error, proyecto/rol incorrecto o salida incompleta exigen detenerse.
+00-required-catalog.sql original sigue disponible; no ejecutar ambas versiones.
+
 1. Con autorización separada, ejecutar 00-required-catalog.sql en ese proyecto.
    Sólo SELECT de catálogos + READ ONLY/ROLLBACK; devuelve discrepancias de tipos,
-   firmas, cuerpos/grants y topología. No consulta cuentas ni ejecuta RPC.
+   firmas, cuerpos/grants, topología, rol, índices/restricciones y funciones zentra_*
+   en todos los esquemas mediante pg_catalog. No consulta cuentas ni ejecuta RPC.
 2. Si el resultado es LEGACY_USERS_ONLY, 01-production-schema.sql es el bootstrap
    transaccional preparado para ese baseline. Si existen objetos zentra_* previos,
    NO ejecutar sobre ellos: el instalador aborta y hay que seleccionar el delta
@@ -25,6 +44,17 @@ ORDEN Y CONDICIONES
 6. Sólo entonces desplegar el nuevo SHA backend aprobado; confirmar Live/health
    y arranque. Publicación de extensión 1.0.3 requiere autorización posterior.
 
+FREE — CAPACIDAD APROBADA, APERTURA PENDIENTE
+La instalación queda cerrada: enabled=false, capacity_total=100, activated_total=0.
+Política aprobada el 18/10/2026: 100 usuarios, 30 días individuales, 20 acciones
+de Chat y 1 auditoría SEO. La migración no abre plazas ni inicia ningún plazo.
+La apertura requiere autorización posterior explícita del propietario.
+Mientras siga OFF, Chat/Audit Free devuelven espera sin consumir ni reclamar slot;
+los planes pagos verificados no dependen de esa apertura. Reejecutar la migración
+no modifica la configuración de Free que se haya aprobado posteriormente.
+Se conserva la ampliación manual de capacity_total, sin reiniciar activated_total,
+usuarios, plazos ni consumos. Lista de espera, mensajes y avisos sin cambios.
+
 DEPENDENCIAS INCLUIDAS, EN ORDEN
 - users: sólo columnas/índices faltantes; no backfill de identidades ni cuentas.
 - Guard de consumo/recibos/Chat/Audit, seguido por leases/adquisición/Search.
@@ -35,10 +65,16 @@ Se omiten SQL de audio STAGING y la versión supersedida del refiner premium.
 Instalación completa: 17 tablas funcionales + ledger de migración; 40 firmas
 RPC incluyendo cores internos. required-schema.json fija tipos/cuerpos esperados.
 La lista de FALTANTES reales la produce 00, no esta cantidad de dependencias.
+El paquete requiere 17 tablas funcionales y 40 firmas RPC nuevas para el baseline
+users-only: bindings Lemon (clientes/checkouts/suscripciones/eventos), recibos,
+reservas/etapas/leases, Search, rate limit y Free Launch ya presentes en el RC.
+El ledger de esquema es adicional. No se incluyen audio ni objetos de Audit app.
 
 PROTECCIONES
 - Una transacción, lock/statement timeout, índices únicos y rechazo de identidad
   duplicada/tipos inesperados/contadores inválidos, sin corregir datos a ciegas.
+- RPCs zentra_* en otro esquema hacen abortar: revisar antes de duplicarlos o
+  cambiar permisos. El CSV public por sí solo no descarta esa posibilidad.
 - Marker transaccional: segunda aplicación no reejecuta wrappers ni modifica
   datos. Si cambian definiciones/grants o faltan objetos, aborta, no los pisa.
 - RLS y RPC sólo servidor; todos los parámetros unlimited de este artefacto
@@ -77,8 +113,14 @@ RECUPERACIÓN
   creados. No borrar cuentas, marcar recibos como no usados ni dar cuotas de prueba.
 
 PRUEBAS FOCALES
-production-schema.test.mjs: PostgreSQL local, 8 cuentas sintéticas, atomicidad,
-replay/drift, preservación, bindings firmados, 10/30/idempotencia y rutas compartidas.
+production-schema.test.mjs: 20 escenarios PostgreSQL 18.4 local con roles sintéticos
+anon/authenticated/service_role. Ejecución completa de los dos archivos SQL (no
+sólo texto), 8 cuentas y pagos sintéticos, CSV20/tipos, otro esquema, atomicidad,
+replay/drift, preservación, bindings firmados, 5/10/30, permisos, Free OFF y rutas
+compartidas. No replica Auth/PostgREST ni certifica la configuración Live de Supabase.
+No se leyeron cuentas/pagos reales. Sin repetir las 42 pruebas anteriores.
 lemon-legacy-identity.test.mjs: primera petición legacy y exclusión de audit/no Auth.
 Sólo 2 tests afectados de production-candidate.test.mjs; no repetir los otros 40.
 No proveedores, SQL remoto, migraciones productivas ni datos privados en fixtures.
+Preflight single-result: 5 comprobaciones locales, conservando exactamente los
+siete juegos de resultados originales. Sin ejecutar 01 en esa prueba.
