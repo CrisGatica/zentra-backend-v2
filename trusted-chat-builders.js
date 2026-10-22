@@ -2287,7 +2287,7 @@ class ClaudeChatbot {
 - El usuario pide modificar un enlace existente, no analizar la pagina activa.
 - Conserva dominio, telefono y parametros que no haya pedido cambiar.
 - Modifica solo el mensaje o parametro solicitado y codificalo correctamente dentro de la URL.
-- Si menciona una promocion anterior, usa el historial del chat como fuente para el nombre y objetivo de esa promocion.
+- Si menciona una promocion anterior, usa solamente los datos verificables del mismo caso. La ultima correccion del usuario prevalece sobre respuestas anteriores. Si pide nombrarla, no uses una referencia generica; si falta el nombre, pedilo.
 - Devuelve un enlace completo, clicable y listo para usar. No devuelvas JSON, una etiqueta "pagina" ni una explicacion sin el enlace final.`);
     }
 
@@ -2692,140 +2692,154 @@ No expliques, no agregues encabezados ni digas "respuesta mejorada".${metaDescri
     };
   }
 
-  extractRecentPromotionName(message = '') {
-    const entries = [String(message || '')];
-    const conversation = Array.isArray(this.conversation) ? this.conversation.slice().reverse() : [];
-    conversation.slice(0, 10).forEach((entry) => {
-      const content = this.extractAssistantText(entry?.content || '') || String(entry?.content || '');
-      if (content) entries.push(content);
-    });
+  getWhatsAppTransformationHistory(limit = 12) {
+    // Query/hash can identify a customer or record: do not strip them here.
+    const currentUrl = String(this.webContext?.url || '');
+    const result = [];
+    for (const entry of (this.conversation || []).slice(-limit).reverse()) {
+      const entryUrl = String(entry?.contextMeta?.pageUrl || '');
+      // Unknown legacy turns cannot establish ownership of a different customer's link.
+      if (currentUrl ? entryUrl !== currentUrl : Boolean(entryUrl)) break;
+      if (['user', 'assistant'].includes(entry?.type || entry?.role)) result.push(entry);
+    }
+    return result;
+  }
 
-    for (const entry of entries) {
+  extractRecentPromotionName(message = '') {
+    const entries = [String(message || ''), ...this.getWhatsAppTransformationHistory()
+      .filter(entry => (entry.type || entry.role) === 'user')
+      .map(entry => this.extractAssistantText(entry.content || '') || '')];
+    for (const raw of entries) {
+      const entry = raw.replace(/https?:\/\/[^\s<>]+/gi, '');
+      // A named requirement in the newest USER turn beats older assistant guesses.
+      const named = entry.match(/\bpromo(?:ciones|ci[oó]n)?\s+(?:de(?:l)?\s+|llamada\s+|titulada\s+|[:“"]\s*)([^\n.!?;:“”"]{2,90})/iu);
+      if (named) {
+        const name = named[1].split(/\s+(?:de|del|en|para|con|y|por|que|debe|debes|inclu[ií]|nombr[aá])\s+/iu)[0].trim();
+        // A generic reference is not a verified promotion name; do not borrow
+        // an older name to fill that ambiguity.
+        if (/^(?:la|el|las|los|esta|esa|este|ese|mi|tu|su|nuestra|anterior|misma|otra)(?:\s|$)/iu.test(name)) return '';
+        if (name && !/^(?:la|el|las|los|esta|esa|anterior|web|cliente|mes|a[nñ]o|temporada|arriba|abajo|enlace|link|whatsapp|promoci[oó]n|promociones)$/iu.test(name)) return name;
+      }
       const treatmentGiftMatch = entry.match(/al\s+realizarte\s+(?:tu\s+)?tratamiento\s+de\s+([^,.!\n]{3,100}),?\s+te\s+llevas?\s+(?:un|una)\s+([^,.!\n]{3,100}?)(?:\s+totalmente)?\s+gratis/iu);
       if (treatmentGiftMatch?.[1] && treatmentGiftMatch?.[2]) {
-        const treatment = String(treatmentGiftMatch[1] || '').replace(/\s+/g, ' ').trim();
-        const gift = String(treatmentGiftMatch[2] || '').replace(/\s+/g, ' ').trim();
-        return `${treatment} con ${gift} gratis`;
+        return treatmentGiftMatch[1].trim() + ' con ' + treatmentGiftMatch[2].trim() + ' gratis';
       }
-
       const explicitMatch = entry.match(/PROMO(?:CI[ÓO]N)?\s+(?:EXCLUSIVA\s*:?[\s-]*)?([A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑ0-9 +&\-]{3,80}?)(?=\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]|\n|[.!?]|$)/u);
-      if (explicitMatch?.[1]) {
-        return String(explicitMatch[1] || '').replace(/\s+/g, ' ').trim();
-      }
+      if (explicitMatch?.[1]) return explicitMatch[1].replace(/\s+/g, ' ').trim();
     }
-
     return '';
   }
 
-  isWhatsAppUrl(url = '') {
+  parseWhatsAppLink(url = '') {
     try {
-      const parsed = new URL(String(url || '').trim());
-      return /(?:^|\.)(?:api\.)?whatsapp\.com$/i.test(parsed.hostname)
-        || /(?:^|\.)wa\.me$/i.test(parsed.hostname);
-    } catch (_) {
-      return false;
-    }
+      const parsed = new URL(String(url).trim());
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return null;
+      const short = parsed.hostname === 'wa.me';
+      if (!short && !['api.whatsapp.com', 'web.whatsapp.com', 'www.whatsapp.com', 'whatsapp.com'].includes(parsed.hostname)) return null;
+      if (short ? !/^\/\+?\d{6,15}\/?$/.test(parsed.pathname) : !/^\/send\/?$/.test(parsed.pathname)) return null;
+      if (parsed.searchParams.getAll('phone').length > 1 || parsed.searchParams.getAll('text').length > 1) return null;
+      const phone = short ? parsed.pathname.replace(/^\/|\/$/g, '') : parsed.searchParams.get('phone');
+      if (!phone || !/^\+?\d{6,15}$/.test(phone)) return null;
+      if (short && parsed.searchParams.has('phone') && parsed.searchParams.get('phone') !== phone) return null;
+      return { parsed, phone, text: parsed.searchParams.get('text') || '', short };
+    } catch (_) { return null; }
   }
 
-  findRecentWhatsAppUrl(limit = 12) {
-    const source = Array.isArray(this.conversation) ? this.conversation.slice().reverse() : [];
-    let inspected = 0;
+  isWhatsAppUrl(url = '') {
+    return Boolean(this.parseWhatsAppLink(url));
+  }
 
-    for (const entry of source) {
-      const content = this.extractAssistantText(entry?.content || '') || String(entry?.content || '');
-      const whatsappUrl = this.extractExactHttpUrls(content).find((url) => this.isWhatsAppUrl(url));
-      if (whatsappUrl) return whatsappUrl;
-
-      inspected += 1;
-      if (inspected >= limit) break;
+  findRecentWhatsAppUrl() {
+    // Never let a hallucinated assistant URL replace the user's original recipient.
+    for (const entry of this.getWhatsAppTransformationHistory()) {
+      if ((entry.type || entry.role) !== 'user') continue;
+      const content = this.extractAssistantText(entry.content || '') || '';
+      const url = this.extractExactHttpUrls(content).find(candidate => this.isWhatsAppUrl(candidate));
+      if (url) return url;
     }
-
     return '';
   }
 
   getUrlTransformationSpec(message = '') {
     const text = String(message || '').trim();
     if (!text) return null;
-
-    const asksTransformation = /(adapt|actualiz|cambi|reemplaz|modific|personaliz|ajust)[a-záéíóúñ]*[\s\S]{0,90}(?:link|enlace|url)|(?:link|enlace|url)[\s\S]{0,90}(adapt|actualiz|cambi|reemplaz|modific|personaliz|ajust)/i.test(text);
-    const asksWhatsAppFollowUp = /(?:link|enlace|url)/i.test(text)
-      && /(?:promoci[oó]n|promo|mensaje|texto|nombr|inclu|acorde|con\s+eso|anterior)/i.test(text);
+    const instruction = text.replace(/https?:\/\/[^\s<>]+/gi, '');
+    const asksTransformation = /(adapt|actualiz|cambi|reemplaz|modific|personaliz|ajust)[a-záéíóúñ]*[\s\S]{0,90}(?:link|enlace|url)|(?:link|enlace|url)[\s\S]{0,90}(adapt|actualiz|cambi|reemplaz|modific|personaliz|ajust)/i.test(instruction);
+    const asksWhatsAppFollowUp = /(?:link|enlace|url)/i.test(instruction)
+      && /(?:nombr|inclu|agreg|correg|corrig)[a-záéíóúñ]*/i.test(instruction);
     if (!asksTransformation && !asksWhatsAppFollowUp) return null;
-
+    // Complex edits remain in the existing model path, not in a lossy local template.
+    if (/(?:tel[eé]fono|n[uú]mero|phone|dominio|par[aá]metros?|utm_|idioma|ingl[eé]s|franc[eé]s|traduc|no\s+(?:incluy|agregu|mencion|us[eé]|pong)|sin\s+|sino\s+|excepto\s+|solo\s+|solamente\s+|exactamente\s+|text\s*=)/iu.test(instruction)) return null;
     const urls = this.extractExactHttpUrls(text);
-    const directSourceUrl = urls.find((url) => this.isWhatsAppUrl(url));
-    const sourceUrl = directSourceUrl || (asksWhatsAppFollowUp ? this.findRecentWhatsAppUrl() : '');
-    if (!sourceUrl) return null;
+    const directUrls = urls.filter(url => this.isWhatsAppUrl(url));
+    // Multiple targets need an explicit model response, never silent recipient selection.
+    if (directUrls.length > 1) return null;
+    const sourceUrl = directUrls[0] || (asksWhatsAppFollowUp ? this.findRecentWhatsAppUrl() : '');
+    const source = this.parseWhatsAppLink(sourceUrl);
+    if (!source) return null;
+    const promotionName = this.extractRecentPromotionName(text);
+    const localText = instruction.split(/[.!?]+/).map(part => this.normalizeIntentText(part)).join('.');
+    const localName = this.normalizeIntentText(promotionName);
+    const localRequest = localName ? localText.split(localName).join('nombre') : localText;
+    // Only the fully understood edit bypasses the model. Extra instructions or
+    // literal copy stay on the normal path with the complete user request.
+    const canBuildLocally = localRequest.split(/[.!?]+/).filter(part => part.trim()).every(part =>
+      /^(?:adapta|adaptame|actualiza|cambia|modifica|ajusta)\s+(?:este\s+|el\s+)?(?:link|enlace|url)(?:\s+de\s+whatsapp)?\s+(?:para|a|con)\s+(?:la\s+|las\s+)?promo(?:cion|ciones)?\s+de\s+nombre$/.test(part.trim())
+      || /^(?:debes?\s+|tenes\s+que\s+)?(?:nombrar|nombra|incluir|inclui)\s+(?:la\s+|las\s+)?promo(?:cion|ciones)?(?:\s+de\s+nombre)?\s+en\s+el\s+(?:link|enlace|url)(?:\s+de\s+whatsapp)?$/.test(part.trim())
+      || /^(?:esta|estoy)\s+interesad[oa]\s+en\s+(?:la\s+|las\s+)?promo(?:cion|ciones)?\s+de\s+nombre$/.test(part.trim())
+      || /^no\s+agregaste\s+(?:la\s+|las\s+)?promo(?:cion|ciones)?$/.test(part.trim()));
+    return {
+      message: text, sourceUrl, phone: source.phone, originalText: source.text, promotionName,
+      canBuildLocally,
+      requiresPromotionName: /(?:promo(?:ci[oó]n|ciones)?|nombr)/iu.test(text),
+      needsThread: !directUrls.length || !promotionName
+    };
+  }
 
-    try {
-      const parsed = new URL(sourceUrl);
-      const rawPhone = parsed.searchParams.get('phone') || parsed.pathname.replace(/^\/+/, '').split('/')[0] || '';
-      const phone = String(rawPhone || '')
-        .replace(/^\s+/, '+')
-        .replace(/\s+/g, '')
-        .trim();
-      const originalText = parsed.searchParams.get('text') || '';
-      const promotionName = this.extractRecentPromotionName(text);
-      const needsThread = !directSourceUrl
-        || /(anterior|lo\s+anterior|esta\s+promoci[oó]n|esa\s+promoci[oó]n|en\s+base\s+a|con\s+lo\s+anterior|con\s+eso|nombrar?\s+la\s+promoci[oó]n)/i.test(text);
-
-      return {
-        message: text,
-        sourceUrl,
-        phone,
-        originalText,
-        promotionName,
-        needsThread
-      };
-    } catch (_) {
-      return null;
+  evaluateUrlTransformationResponse(spec, assistantText = '') {
+    if (!spec) return { applicable: false, valid: true, issues: [] };
+    const source = this.parseWhatsAppLink(spec.sourceUrl);
+    // References outside WhatsApp are not target links and must not invalidate
+    // an otherwise correct answer. Still reject malformed/changed WhatsApp links.
+    const urls = this.extractExactHttpUrls(String(assistantText || '')).filter(url => {
+      try { return /(?:^|\.)(?:whatsapp\.com|wa\.me)$/i.test(new URL(url).hostname); }
+      catch (_) { return false; }
+    });
+    const issues = new Set();
+    if (!source || !urls.length) issues.add('invalid_whatsapp_url');
+    for (const url of urls) {
+      const candidate = this.parseWhatsAppLink(url);
+      if (!candidate) { issues.add('invalid_whatsapp_url'); continue; }
+      if (candidate.phone !== spec.phone) issues.add('recipient_changed');
+      if (candidate.parsed.origin !== source?.parsed.origin || candidate.parsed.pathname !== source?.parsed.pathname
+          || candidate.parsed.hash !== source?.parsed.hash) issues.add('source_changed');
+      const parameters = value => [...value.parsed.searchParams].filter(([key]) => key !== 'text')
+        .map(pair => JSON.stringify(pair)).sort().join('|');
+      if (source && parameters(source) !== parameters(candidate)) issues.add('parameters_changed');
+      if (!candidate.text.trim()) issues.add('empty_message');
+      // Unknown evidence is not a confirmed violation of a requirement.
+      if (spec.promotionName) {
+        const required = this.normalizeIntentText(spec.promotionName);
+        const actual = this.normalizeIntentText(candidate.text);
+        if (!(' ' + actual + ' ').includes(' ' + required + ' ')) issues.add('required_text_missing');
+      } else if (candidate.text === spec.originalText) issues.add('unchanged_message');
     }
+    return { applicable: true, valid: issues.size === 0, issues: [...issues] };
   }
 
   buildWhatsAppLinkTransformationFallback(spec = null) {
-    if (!spec?.sourceUrl) return '';
-
-    try {
-      const parsed = new URL(spec.sourceUrl);
-      const promotionLabel = spec.promotionName
-        ? `la promoción de ${spec.promotionName}`
-        : 'esta promoción';
-      const message = `Hola, vengo de la web y quisiera saber más sobre ${promotionLabel} y agendar una cita.`;
-
-      if (spec.phone) parsed.searchParams.set('phone', spec.phone);
-      parsed.searchParams.set('text', message);
-      return parsed.toString();
-    } catch (_) {
-      return '';
-    }
+    if (!spec?.sourceUrl || !spec.canBuildLocally || (spec.requiresPromotionName && !spec.promotionName)) return '';
+    const source = this.parseWhatsAppLink(spec.sourceUrl);
+    if (!source) return '';
+    const label = spec.promotionName ? 'las promociones de ' + spec.promotionName : 'esta promoción';
+    // No invented booking request, prices, availability or services.
+    source.parsed.searchParams.set('text', 'Hola, vengo de la web y estoy interesado en ' + label + '. Quisiera recibir más información.');
+    const result = source.parsed.toString();
+    return this.evaluateUrlTransformationResponse(spec, result).valid ? result : '';
   }
 
   isInvalidUrlTransformationResponse({ userMessage = '', assistantText = '' } = {}) {
-    const spec = this.getUrlTransformationSpec(userMessage);
-    if (!spec) return false;
-
-    const content = String(assistantText || '').trim();
-    if (!content || this.isPublicSystemFallbackText(content)) return true;
-
-    const candidates = this.extractExactHttpUrls(content);
-    return !candidates.some((candidate) => {
-      try {
-        const parsed = new URL(candidate);
-        const candidatePhone = parsed.searchParams.get('phone') || parsed.pathname.replace(/^\/+/, '').split('/')[0] || '';
-        const candidateText = parsed.searchParams.get('text') || '';
-        const normalizedCandidateText = this.normalizeIntentText(candidateText);
-        const alreadyNamesPromotion = Boolean(
-          spec.promotionName
-          && normalizedCandidateText.includes(this.normalizeIntentText(spec.promotionName))
-        );
-        if (!candidateText || (candidateText === spec.originalText && !alreadyNamesPromotion)) return false;
-        if (spec.phone && candidatePhone !== spec.phone) return false;
-        if (spec.promotionName && !alreadyNamesPromotion) return false;
-        return true;
-      } catch (_) {
-        return false;
-      }
-    });
+    return !this.evaluateUrlTransformationResponse(this.getUrlTransformationSpec(userMessage), assistantText).valid;
   }
 
   isInvalidDirectTextOrganizationResponse({ userMessage = '', assistantText = '' } = {}) {
@@ -11539,7 +11553,7 @@ Se trata de una gestión que excede nuestro alcance por motivos de seguridad.`;
           },
           {
             role: 'user',
-            content: `Pedido:\n${String(userMessage || '').trim()}\n\nPromoción detectada en el hilo: ${urlTransformation.promotionName || 'no confirmada; usa una referencia natural a esta promoción'}`
+            content: `Pedido:\n${String(userMessage || '').trim()}\n\nPromoción detectada en el hilo: ${urlTransformation.promotionName || 'no confirmada; solicitá el nombre si es necesario, sin sustituirlo por esta promoción'}`
           }
         ],
         zentra_routing: {
