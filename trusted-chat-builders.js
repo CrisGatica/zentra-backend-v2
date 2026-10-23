@@ -922,28 +922,73 @@ class ClaudeChatbot {
     return null;
   }
 
-  selectConversationHistoryForRequest(userMessage, entries = [], allowCrossPage = false) {
+  usesRestoredConversation(message = '', linkTransformation = false) {
+    return Boolean(this.restoredConversationId && this.restoredConversationId === this.activeSavedConversationId
+      && !this.referencesExplicitPageContext(message)
+      && (linkTransformation || this.referencesChatThreadContext(message)
+        || Boolean(this.getUrlTransformationSpec(message))));
+  }
+
+  getRestoredConversationSelection(message = '', entries = [], linkTransformation = false) {
+    if (!this.usesRestoredConversation(message, linkTransformation)) return null;
+    const id = this.restoredConversationId;
+    let source = Array.isArray(entries) ? entries : [];
+    // The current input is not its own historical referent.
+    if (source.at(-1)?.type === 'user' && source.at(-1)?.content === message) source = source.slice(0, -1);
+    const owned = source.slice(-40).filter(entry => ['user', 'assistant'].includes(entry?.type)
+      && typeof entry.content === 'string' && entry.contextMeta?.restoredConversationId === id);
+    const key = entry => entry.contextMeta?.restoredCaseKey || JSON.stringify([
+      entry.contextMeta?.pageUrl || '', entry.contextMeta?.conversationContactId || entry.contextMeta?.ticketId || ''
+    ]);
+    const reference = this.getScopedHistoryReference(message);
+    const related = reference ? owned.filter(entry => reference.test(this.normalizeIntentText(entry.content))) : owned;
+    const assertions = related.filter(entry => entry.type === 'user');
+    const candidates = assertions.length ? assertions : related;
+    const cases = new Set(candidates.map(key));
+    // A saved workflow can contain several customers. Restoration is not a
+    // license to merge them or silently choose the newest matching customer.
+    const caseKey = cases.size === 1 ? [...cases][0] : '';
+    return { id, caseKey, ambiguous: cases.size > 1,
+      entries: caseKey ? owned.filter(entry => key(entry) === caseKey) : [] };
+  }
+
+  withRestoredConversationMeta(meta, message = '') {
+    if (!this.restoredConversationId || this.restoredConversationId !== this.activeSavedConversationId) return meta;
+    const selection = this.getRestoredConversationSelection(message, this.conversation);
+    return { ...(meta || {}), restoredConversationId: this.restoredConversationId,
+      ...(selection ? { contextLabel: 'Conversación recuperada', pageEvidenceUsed: false } : {}),
+      ...(selection?.caseKey ? { restoredCaseKey: selection.caseKey } : {}) };
+  }
+
+  selectConversationHistoryForRequest(userMessage, entries = [], allowCrossPage = false, linkTransformation = false) {
     const source = Array.isArray(entries) ? entries : [];
     const reference = this.getScopedHistoryReference(userMessage);
-    if (!reference) return this.filterConversationHistoryForCurrentContext(
+    const restored = this.getRestoredConversationSelection(userMessage, source, linkTransformation);
+    if (!reference && !restored) return this.filterConversationHistoryForCurrentContext(
       source.slice(-7), this.webContext?.url || '', allowCrossPage);
     // Lookup only already observed turns, never another page/case. Query/hash
     // remain part of identity. Seven transmitted turns: no context-budget raise.
     const pageUrl = String(this.webContext?.url || '');
-    if (!pageUrl) return [];
+    if (!pageUrl && !restored) return [];
     const contactId = this.webContext?.conversationContext?.contact?.id || this.webContext?.ticketContext?.id;
-    const scoped = source.slice(-40).filter(entry => {
+    const scoped = restored ? restored.entries : source.slice(-40).filter(entry => {
       const entryId = entry?.contextMeta?.conversationContactId || entry?.contextMeta?.ticketId;
       return ['user', 'assistant'].includes(entry?.type) && typeof entry.content === 'string'
         && entry.contextMeta?.pageUrl === pageUrl
         && (!contactId || !entryId || String(entryId) === String(contactId));
     });
     const matches = scoped.map((entry, index) => ({entry, index}))
-      .filter(({entry}) => reference.test(this.normalizeIntentText(entry.content)));
+      .filter(({entry}) => !reference || reference.test(this.normalizeIntentText(entry.content)));
     // Prefer literal, substantive turns over short acknowledgements. Send them
     // verbatim, not as a generated summary or a new factual memory.
     const detailed = matches.filter(({entry}) => entry.content.length >= 120 || /\d/.test(entry.content));
     const anchors = (detailed.length ? detailed : matches).slice(-2);
+    if (restored && /\b(?:whatsapp|enlace|link)\b/i.test(userMessage)) {
+      const recipient = scoped.map((entry, index) => ({ entry, index })).findLast(({entry}) =>
+        entry.type === 'user' && (this.extractExactHttpUrls(entry.content).some(url => this.isWhatsAppUrl(url))
+          || /(?:whatsapp|tel[eé]fono)[^\n]{0,30}\+?\d{6,15}\b/i.test(entry.content)));
+      if (recipient && !anchors.some(item => item.index === recipient.index)) anchors.push(recipient);
+    }
     const selected = new Set(anchors.map(item => item.index));
     for (const {entry, index} of anchors) {
       const partner = entry.type === 'user' ? index + 1 : index - 1;
@@ -2740,7 +2785,10 @@ No expliques, no agregues encabezados ni digas "respuesta mejorada".${metaDescri
     };
   }
 
-  getWhatsAppTransformationHistory(limit = 12) {
+  getWhatsAppTransformationHistory(limit = 12, message = '') {
+    const restored = this.getRestoredConversationSelection(message, this.conversation, true);
+    if (restored) return this.selectConversationHistoryForRequest(
+      message, restored.entries, false, true).slice(-Math.min(limit, 7)).reverse();
     // Query/hash can identify a customer or record: do not strip them here.
     const currentUrl = String(this.webContext?.url || '');
     const result = [];
@@ -2754,7 +2802,7 @@ No expliques, no agregues encabezados ni digas "respuesta mejorada".${metaDescri
   }
 
   extractRecentPromotionName(message = '') {
-    const entries = [String(message || ''), ...this.getWhatsAppTransformationHistory()
+    const entries = [String(message || ''), ...this.getWhatsAppTransformationHistory(12, message)
       .filter(entry => (entry.type || entry.role) === 'user')
       .map(entry => this.extractAssistantText(entry.content || '') || '')];
     for (const raw of entries) {
@@ -2797,9 +2845,9 @@ No expliques, no agregues encabezados ni digas "respuesta mejorada".${metaDescri
     return Boolean(this.parseWhatsAppLink(url));
   }
 
-  findRecentWhatsAppUrl() {
+  findRecentWhatsAppUrl(message = '') {
     // Never let a hallucinated assistant URL replace the user's original recipient.
-    for (const entry of this.getWhatsAppTransformationHistory()) {
+    for (const entry of this.getWhatsAppTransformationHistory(12, message)) {
       if ((entry.type || entry.role) !== 'user') continue;
       const content = this.extractAssistantText(entry.content || '') || '';
       const url = this.extractExactHttpUrls(content).find(candidate => this.isWhatsAppUrl(candidate));
@@ -2822,7 +2870,7 @@ No expliques, no agregues encabezados ni digas "respuesta mejorada".${metaDescri
     const directUrls = urls.filter(url => this.isWhatsAppUrl(url));
     // Multiple targets need an explicit model response, never silent recipient selection.
     if (directUrls.length > 1) return null;
-    const sourceUrl = directUrls[0] || (asksWhatsAppFollowUp ? this.findRecentWhatsAppUrl() : '');
+    const sourceUrl = directUrls[0] || (asksWhatsAppFollowUp ? this.findRecentWhatsAppUrl(text) : '');
     const source = this.parseWhatsAppLink(sourceUrl);
     if (!source) return null;
     const promotionName = this.extractRecentPromotionName(text);
@@ -5073,6 +5121,7 @@ REGLA DE IDENTIDAD PUBLICA
   }
 
   buildTaskMemoryPromptBlock({ environmentSummary = null, userMessage = '', taskIntent = null } = {}) {
+    if (this.usesRestoredConversation(userMessage)) return '';
     const memory = this.normalizeTaskMemory(this.taskMemory);
     if (taskIntent?.label === 'case_resolution' && this.looksLikePastedConversationBlock(userMessage)) {
       return '';

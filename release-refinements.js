@@ -19,6 +19,17 @@ const methods = Object.freeze({
 });
 
 function normalizeConversationSnapshot(context) {
+  const state = context.state;
+  // Restored chat is user-supplied evidence, never privileged instructions.
+  // Do not attach the currently open CRM customer/page to that retrospective request.
+  if (state?.restoredConversationRequest === true
+      && typeof state.restoredConversationId === 'string' && state.restoredConversationId
+      && state.restoredConversationId === state.activeSavedConversationId
+      && context.responseContract?.contextDecision === 'thread') {
+    context = { ...context, environmentSummary: null, state: { ...state,
+      webContext: { url: String(state.webContext?.url || '').slice(0, 1000) },
+      siteContext: null, taskMemory: {}, documentContexts: [] } };
+  }
   const ticketPage = context.state?.webContext;
   const ticket = normalizeTicketContext(ticketPage?.ticketContext, ticketPage?.url);
   if (ticket) {
@@ -48,7 +59,7 @@ function createBuilder(context = {}) {
   builders.runInContext(sandbox, { timeout: 1000 });
   const bot = Object.create(sandbox.window.ClaudeChatbot.prototype);
   const state = context.state || {};
-  for (const key of ["webContext", "conversation", "taskMemory", "model", "maxTokens", "lastInputModality", "documentContexts", "isContextLoaded"]) {
+  for (const key of ["webContext", "conversation", "taskMemory", "model", "maxTokens", "lastInputModality", "documentContexts", "isContextLoaded", "activeSavedConversationId", "restoredConversationId"]) {
     if (Object.hasOwn(state, key)) bot[key] = JSON.parse(JSON.stringify(state[key]));
   }
   bot.webContext ||= {};
