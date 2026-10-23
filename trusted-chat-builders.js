@@ -753,6 +753,7 @@ class ClaudeChatbot {
   shouldCarryCrossPageHistory(userMessage = '', taskIntent = null) {
     const text = String(userMessage || '').trim().toLowerCase();
     if (!text) return false;
+    if (this.getScopedHistoryReference(userMessage)) return false;
 
     if (taskIntent?.compareMode || taskIntent?.threadWide) return true;
     if (this.isCompareIntent(text) || this.isCompareFollowUp(text)) return true;
@@ -904,9 +905,53 @@ class ClaudeChatbot {
   referencesChatThreadContext(message = '') {
     const text = String(message || '').toLowerCase();
     if (!text) return false;
+    if (this.getScopedHistoryReference(message)) return true;
 	    return /(chat|hilo|conversacion|conversación|lo anterior|todo lo anterior|lo que vimos|todo lo que vimos|lo hablado|lo conversado|lo que analizamos|lo que venimos viendo|siguiendo lo anterior|retomando|retoma|continu[aá]|seguimos|segui con eso|seguí con eso|lo mismo|igual que antes|igual que el anterior|sobre eso|con eso|de eso|en base a eso|en base a lo que|respecto a eso|explicame mas|explicame más|amplia eso|ampliá eso|profundiza eso|profundizá eso|mas detalle|más detalle|comparalo con|comparala con|resumi todo|resume todo|resumen de todo|haceme un resumen|hazme un resumen|sintetiza|sintetiz[aá]|consolida|junta todo|integra todo|adaptar[ií]as|que adaptar[ií]as|qué adaptar[ií]as|que rescatamos|qué rescatamos|que aprendimos|qué aprendimos|patrones|patron|patr[oó]n)/i.test(text)
         || Boolean(this.getAssistantOfferFollowUpSpec(message));
 	  }
+
+  getScopedHistoryReference(message = '') {
+    const text = this.normalizeIntentText(this.getIntentInstructionText(message).replace(/https?:\/\/[^\s<>]+/gi, ''));
+    if (/\b(?:compar[a-z]*|ambos|ambas|otra pagina|otro cliente|otro caso|otra conversacion)\b/.test(text)) return null;
+    if (!/\b(?:que (?:hablamos|vimos|redactamos|preparamos|mencionamos|mencionaste|redactaste)|de antes|anterior(?:es)?)\b/.test(text)) return null;
+    for (const pattern of [
+      /\b(?:promocion(?:es)?|promos?)\b/,
+      /\b(?:texto(?:s)?|mensaje(?:s)?|copy|copys)\b/,
+      /\b(?:propuesta(?:s)?|presupuesto(?:s)?)\b/
+    ]) if (pattern.test(text)) return pattern;
+    return null;
+  }
+
+  selectConversationHistoryForRequest(userMessage, entries = [], allowCrossPage = false) {
+    const source = Array.isArray(entries) ? entries : [];
+    const reference = this.getScopedHistoryReference(userMessage);
+    if (!reference) return this.filterConversationHistoryForCurrentContext(
+      source.slice(-7), this.webContext?.url || '', allowCrossPage);
+    // Lookup only already observed turns, never another page/case. Query/hash
+    // remain part of identity. Seven transmitted turns: no context-budget raise.
+    const pageUrl = String(this.webContext?.url || '');
+    if (!pageUrl) return [];
+    const contactId = this.webContext?.conversationContext?.contact?.id || this.webContext?.ticketContext?.id;
+    const scoped = source.slice(-40).filter(entry => {
+      const entryId = entry?.contextMeta?.conversationContactId || entry?.contextMeta?.ticketId;
+      return ['user', 'assistant'].includes(entry?.type) && typeof entry.content === 'string'
+        && entry.contextMeta?.pageUrl === pageUrl
+        && (!contactId || !entryId || String(entryId) === String(contactId));
+    });
+    const matches = scoped.map((entry, index) => ({entry, index}))
+      .filter(({entry}) => reference.test(this.normalizeIntentText(entry.content)));
+    // Prefer literal, substantive turns over short acknowledgements. Send them
+    // verbatim, not as a generated summary or a new factual memory.
+    const detailed = matches.filter(({entry}) => entry.content.length >= 120 || /\d/.test(entry.content));
+    const anchors = (detailed.length ? detailed : matches).slice(-2);
+    const selected = new Set(anchors.map(item => item.index));
+    for (const {entry, index} of anchors) {
+      const partner = entry.type === 'user' ? index + 1 : index - 1;
+      if (scoped[partner] && scoped[partner].type !== entry.type) selected.add(partner);
+    }
+    for (let index = scoped.length - 1; index >= 0 && selected.size < 7; index--) selected.add(index);
+    return [...selected].sort((a, b) => a - b).slice(-7).map(index => scoped[index]);
+  }
 
   getRecentAssistantText(limit = 8) {
     const source = Array.isArray(this.conversation) ? this.conversation.slice().reverse() : [];
@@ -2245,6 +2290,9 @@ class ClaudeChatbot {
     };
 
     const specificRules = [];
+    if (this.getScopedHistoryReference(userMessage)) {
+      specificRules.push('REFERENCIA AL HILO DEL MISMO CASO\nUsá primero los datos literales de los turnos entregados y sus correcciones posteriores; no vuelvas a pedir información que ya está escrita. Si hay varias promociones o propuestas y no se identifica cuál, preguntá sólo cuál de las disponibles; no elijas una por suposición. Si el referente no está en el contexto entregado, pedí únicamente el dato faltante, sin afirmar que revisaste todo el historial ni recuperar datos de otro cliente.');
+    }
 
     if (contract.outputType === 'response' && contract.renderType === 'plain'
       && this.isReadyToSendMessageRequest(instructionText)) {
@@ -3725,13 +3773,14 @@ Redacta una resolucion interna de soporte completa, profesional y lista para peg
 REGLAS
 - Reconstruye la cronologia y usa las actualizaciones mas recientes como estado final.
 - Explica con claridad que se reviso, que se hizo, cual fue el resultado y que queda pendiente.
-- Separa lo que el agente afirma haber realizado de lo corroborado por evidencia del historial. No conviertas su confirmacion expresa en un pendiente, ni la presentes como verificacion externa.
+- Una confirmacion explicita del agente es evidencia de la gestion informada: registrala de forma natural, sin convertirla en un pendiente ni exigir una verificacion externa que no se solicito. Atribui o distingui fuentes cuando haya contradiccion o cuando cambie la conclusion.
 - Las URLs de avatares, iconos e imagenes decorativas son ruido secundario, no paginas que el usuario haya pedido revisar.
 - Si pide requisitos para cambiar una direccion en Google Business Profile, no inventes comprobaciones externas ni requisitos universales. La verificacion por video depende del metodo que Google solicite para ese perfil; si no consta, indicalo como no confirmado.
 - Distingue el cierre de la atencion de soporte del resultado de una operacion externa. support.status describe solo la conversacion: cerrada no confirma una acreditacion, entrega ni ejecucion. Si es unknown, no inventes que esta abierta o cerrada ni deduzcas su estado actual de un cierre historico.
 - Conserva las aclaraciones y correcciones posteriores. Operaciones con distinto origen, importe o concepto son independientes salvo vinculo explicito; no relaciones sus plazos por suposicion.
 - Distingue solicitudes, propuestas, trabajos confirmados y pendientes reales. No declares acreditaciones, entregas u otros resultados externos sin confirmacion; un resultado pendiente no implica que la atencion siga abierta.
 - El historial loaded_only/incomplete es parcial, incluso si conserva mensajes observados anteriormente. No afirmes haber revisado la conversacion completa; indica brevemente la limitacion cuando afecte la resolucion.
+- Redacta la resolucion directa y concisa. No agregues salvedades por defecto sobre historial parcial, falta de verificacion independiente o ausencia de otras gestiones. Adverti solo una incertidumbre concreta que cambie la conclusion, el estado de un resultado externo o el proximo paso; indica exactamente que falta confirmar.
 - Si hay datos contradictorios, prioriza el mensaje mas reciente y no inventes el dato correcto.
 - Conserva exactamente los nombres, correos, dominios, URLs y referencias relevantes que aparezcan completos.
 - Distingue correos de URLs: un correo completo contiene usuario, arroba y dominio; nunca presentes una URL o referencia truncada con puntos suspensivos como correo o cuenta confirmada.
@@ -9691,7 +9740,8 @@ Si el usuario pide la resolucion, cierre o resumen final de un caso, ticket o ch
 - redacta como una persona que deja constancia clara de lo realizado
 - prioriza una salida natural, breve y profesional, no una ficha fragmentada
 - explica que se hizo, que se entrego y cual fue el resultado visible
-- distingue lo confirmado por el agente de lo corroborado en el historial; separa pendientes reales e informacion faltante, sin inventar verificaciones externas
+- usa las confirmaciones expresas del agente como evidencia de la gestion informada; distingue fuentes solo si hay contradiccion o si afecta la conclusion, sin inventar verificaciones externas
+- no agregues advertencias de completitud o verificacion por defecto; conserva solo la incertidumbre concreta que cambie la conclusion o el proximo paso, sin declarar confirmado un resultado externo que sigue pendiente
 - ignora URLs decorativas de avatares e iconos; una eventual verificacion por video en Google Business Profile depende del metodo solicitado por Google, no es un requisito universal confirmado
 - si hay enlace o accion puntual, integralo dentro del texto solo cuando aporte claridad
 - no conviertas la respuesta en bloques tipo "Estado", "Mensaje", "Agente", "Link", "Disponibilidad" o similares salvo que el usuario pida expresamente ese formato
@@ -9891,16 +9941,12 @@ REESCRITURAS CORTAS
     
     // Excluir el ultimo mensaje porque ya fue agregado a this.conversation
     // en handleSendMessage() y lo vamos a reconstruir abajo correctamente.
-    const rawHistoryToSend = fastIntent?.skipHistory ? [] : this.conversation.slice(-8, -1);
 	    const allowCrossPageHistory = responseContract.contextDecision === 'thread'
         || responseContract.contextDecision === 'mixed'
         || carriesRecentImageContext
         || this.shouldCarryCrossPageHistory(userMessage, taskIntent);
-    const historyToSend = this.filterConversationHistoryForCurrentContext(
-      rawHistoryToSend,
-      this.webContext?.url || '',
-      allowCrossPageHistory
-    );
+    const historyToSend = fastIntent?.skipHistory ? [] : this.selectConversationHistoryForRequest(
+      userMessage, this.conversation.slice(0, -1), allowCrossPageHistory);
 
     for (const msg of historyToSend) {
       if (msg.type === 'user') {
