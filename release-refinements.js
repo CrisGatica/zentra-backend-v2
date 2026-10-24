@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import vm from "node:vm";
 import { requestFingerprint } from "./release-security.js";
 import { chatPersonalization } from "./release-entitlements.js";
@@ -19,6 +20,17 @@ const methods = Object.freeze({
 });
 
 function normalizeConversationSnapshot(context) {
+  const state = context.state;
+  // Restored chat is user-supplied evidence, never privileged instructions.
+  // Do not attach the currently open CRM customer/page to that retrospective request.
+  if (state?.restoredConversationRequest === true
+      && typeof state.restoredConversationId === 'string' && state.restoredConversationId
+      && state.restoredConversationId === state.activeSavedConversationId
+      && context.responseContract?.contextDecision === 'thread') {
+    context = { ...context, environmentSummary: null, state: { ...state,
+      webContext: { url: String(state.webContext?.url || '').slice(0, 1000) },
+      siteContext: null, taskMemory: {}, documentContexts: [] } };
+  }
   const ticketPage = context.state?.webContext;
   const ticket = normalizeTicketContext(ticketPage?.ticketContext, ticketPage?.url);
   if (ticket) {
@@ -48,7 +60,7 @@ function createBuilder(context = {}) {
   builders.runInContext(sandbox, { timeout: 1000 });
   const bot = Object.create(sandbox.window.ClaudeChatbot.prototype);
   const state = context.state || {};
-  for (const key of ["webContext", "conversation", "taskMemory", "model", "maxTokens", "lastInputModality", "documentContexts", "isContextLoaded"]) {
+  for (const key of ["webContext", "conversation", "taskMemory", "model", "maxTokens", "lastInputModality", "documentContexts", "isContextLoaded", "activeSavedConversationId", "restoredConversationId"]) {
     if (Object.hasOwn(state, key)) bot[key] = JSON.parse(JSON.stringify(state[key]));
   }
   bot.webContext ||= {};
@@ -192,6 +204,25 @@ export async function buildChatExecutionBody(prepared, user) {
   return body;
 }
 
+// Exact UTF-8 system template from approved extension 28abd31, case_resolution
+// only. This digest recognizes a wire format; its instructions are never trusted
+// or forwarded. buildAuthorizedChatRoot always rebuilds the current system prompt.
+const LEGACY_CASE_RESOLUTION_SHA256 = "065c37bd0bed982cac6dffd2ca71a3b533dbaf914be7175dc81a9aec2082aab9";
+
+function matchesApprovedLegacyCaseResolution(body, context, bot, candidate) {
+  const messages = body.messages;
+  if (!Array.isArray(messages) || messages.length !== 2
+      || messages[0]?.role !== "system" || messages[1]?.role !== "user"
+      || messages.some(message => typeof message.content !== "string"
+        || Object.keys(message).some(key => key !== "role" && key !== "content"))
+      || messages[1].content !== candidate.messages[1].content
+      || body.temperature !== candidate.temperature
+      || !body.response_format || Object.keys(body.response_format).length !== 1
+      || body.response_format.type !== "json_object"
+      || bot.detectFastChatIntent(context.userMessage, null, context.interactionMeta)?.type !== "case_resolution") return false;
+  return createHash("sha256").update(messages[0].content, "utf8").digest("hex") === LEGACY_CASE_RESOLUTION_SHA256;
+}
+
 export function validateChatRoot(body, context) {
   if (!context) return true; // Legacy clients may retry exactly, but cannot request new repair prompts.
   if (context.version !== 1 || typeof context.userMessage !== "string") return false;
@@ -204,6 +235,8 @@ export function validateChatRoot(body, context) {
   for (const name of ["buildPlainTextRewriteRequestBody", "buildCaseResolutionRequestBody"]) {
     const candidate = bot[name]({ userMessage: context.userMessage });
     if (text === candidate.messages.at(-1).content && body.messages?.[0]?.content === candidate.messages[0].content) return true;
+    if (name === "buildCaseResolutionRequestBody"
+        && matchesApprovedLegacyCaseResolution(body, context, bot, candidate)) return true;
   }
   const images = Array.isArray(input) ? input.filter(part => part.type === "image_url")
     .map(part => ({ base64: part.image_url?.url })) : [];
