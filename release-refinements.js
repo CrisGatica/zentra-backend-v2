@@ -215,6 +215,13 @@ export function validateChatRoot(body, context) {
   for (const name of ["buildPlainTextRewriteRequestBody", "buildCaseResolutionRequestBody"]) {
     const candidate = bot[name]({ userMessage: context.userMessage });
     if (text === candidate.messages.at(-1).content && body.messages?.[0]?.content === candidate.messages[0].content) return true;
+    if (name === "buildPlainTextRewriteRequestBody" && text === candidate.messages.at(-1).content) {
+      // A persisted rewrite root already carries our static source policies.
+      // Match the exact trusted reconstruction, never a client-added suffix.
+      const canonical = withVerifiedReferencePolicy(withChatContinuity(withTicketEvidence(
+        withConversationEvidence(candidate,bot.webContext.conversationContext),bot.webContext),context),bot.webContext);
+      if (body.messages?.[0]?.content === canonical.messages[0].content) return true;
+    }
   }
   const images = Array.isArray(input) ? input.filter(part => part.type === "image_url")
     .map(part => ({ base64: part.image_url?.url })) : [];

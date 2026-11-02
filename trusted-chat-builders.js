@@ -1639,7 +1639,7 @@ class ClaudeChatbot {
       };
     }
 
-    const rewriteCue = /(mejor(?:a|á)(?:me)?(?=\s|:|$)|mejorar|correg[ií]|corrige|corregir|correcci[oó]n|acentos?|puntuaci[oó]n|reescrib|reformul[aá]|pul[ií]|redact(?:a|á)?lo\s+mejor|redact(?:a|á)me\s+mejor|optimiza este texto|hacelo m[aá]s|hazlo m[aá]s|pasalo a|pas[aá]lo a|responde mejor|respuesta mejorada)/i.test(normalized);
+    const rewriteCue = /(mejor(?:a|á)(?:me)?(?=\s|:|$)|mejorar|profesionali[sz]|adapt[aá](?:lo|me)?(?=\s|:|$)|correg[ií]|corrige|corregir|correcci[oó]n|acentos?|puntuaci[oó]n|reescrib|reformul[aá]|pul[ií]|redact(?:a|á)?lo\s+mejor|redact(?:a|á)me\s+mejor|optimiza este texto|hacelo m[aá]s|hazlo m[aá]s|pasalo a|pas[aá]lo a|responde mejor|respuesta mejorada)/i.test(normalized);
     const shortenCue = /(versi[oó]n m[aá]s corta|versi[oó]n corta|m[aá]s corto|mas corto|acorta|acortalo|acort[aá]melo|resum[ií]|resumir|resumen de este texto|hacelo m[aá]s breve|hazlo m[aá]s breve)/i.test(normalized);
     const hasShortInstructionColon = /^[^:\n]{0,140}:\s*\S/.test(text);
     const explicitTextTarget = /(esta respuesta|este texto|esta frase|este mensaje|este copy|esta resoluci[oó]n|este caso interno|esta redacci[oó]n|lo siguiente|esto:|respuesta:|texto:|mensaje:)/i.test(normalized) || /["“].+["”]/.test(text) || hasShortInstructionColon;
@@ -1647,7 +1647,7 @@ class ClaudeChatbot {
     const simpleSeoRewriteRequest = this.isSimpleSeoRewriteRequest(text);
     const metaDescriptionRewriteRequest = this.isMetaDescriptionRewriteRequest(text);
     const textOnlyTransformRequest = Boolean(explicitTextPayload) && (rewriteCue || shortenCue);
-    const instructionPrefix = normalized.slice(0, Math.max(0, normalized.indexOf(':')) || 220);
+    const instructionPrefix = this.getSimpleRewriteInstructionText(text).toLowerCase();
     const asksToAnalyzeTransform = /(analiz|evalu|diagn[oó]stic|compar|explic|estrateg|por\s+qu[eé]|recomend)/i.test(instructionPrefix);
     const explicitPlainRewriteRequest = Boolean(explicitTextPayload)
       && (rewriteCue || shortenCue)
@@ -1681,6 +1681,22 @@ class ClaudeChatbot {
     return null;
   }
 
+  getMultilineRewriteParts(message = '') {
+    const lines = String(message || '').trim().split(/\r?\n/);
+    if (lines.length < 2 || lines[0].length > 220
+      || !/^(?:por favor[,\s]+)?(?:mejor(?:a|á)(?:me)?|mejorar|corr(?:eg[ií]|ige|egir)|reescrib|reformul|profesionali[sz]|adapt[aá]|hacelo|hazlo)/i.test(lines[0].trim())) return null;
+    const tone = /^(?:(?:s[eé]|hazlo|hacelo|tono|m[aá]s)\s+)?(?:emp[aá]tic[oa]|profesional|cercan[oa]|breve|amable|formal|cordial)(?:\s+(?:y\s+)?(?:m[aá]s\s+)?(?:emp[aá]tic[oa]|profesional|cercan[oa]|breve|amable|formal|cordial))*[.!:]?$/i;
+    const instruction = [lines.shift().replace(/:\s*$/, '').trim()];
+    while (lines.length && (!lines[0].trim() || tone.test(lines[0].trim()))) {
+      const line = lines.shift().trim(); if (line) instruction.push(line);
+    }
+    while (lines.length && (!lines.at(-1).trim() || tone.test(lines.at(-1).trim()))) {
+      const line = lines.pop().trim(); if (line) instruction.push(line);
+    }
+    const source = lines.join('\n').trim();
+    return source ? {instruction:instruction.join('\n'),source} : null;
+  }
+
   extractExplicitTextTransformPayload(message = '') {
     const text = String(message || '').trim();
     if (!text) return '';
@@ -1695,6 +1711,9 @@ class ClaudeChatbot {
       payload = payload.replace(/\s*["“”]$/, '').trim();
       return payload;
     };
+
+    const multiline = this.getMultilineRewriteParts(text);
+    if (multiline) return cleanPayload(multiline.source);
 
     const colonMatch = text.match(/^[^:\n]{0,220}:\s*([\s\S]+)$/);
     if (colonMatch?.[1]) {
@@ -2602,7 +2621,7 @@ ${specificRules.length ? `\n\n${specificRules.join('\n\n')}` : ''}`;
     const trimmed = text.trim();
     if (!trimmed || trimmed.length > 4000) return null;
 
-    const normalized = trimmed.toLowerCase();
+    const normalized = this.getSimpleRewriteInstructionText(trimmed).toLowerCase();
     let transformType = '';
 
     if (/(?:\ba\b|\ben\b|\bsolo\b|\bpasalo\b|\bpas[aá]melo\b|\bconvert[ií]lo\b|\bdejalo\b).{0,18}min[uú]sculas?|\bmin[uú]sculas?\b/i.test(normalized)) {
@@ -2701,13 +2720,13 @@ No expliques, no agregues encabezados ni digas "respuesta mejorada".${metaDescri
   }
 
   getSimpleRewriteProfile(userMessage = '') {
-    const text = String(userMessage || '').trim();
+    const text = this.getSimpleRewriteInstructionText(userMessage);
     const normalized = text.toLowerCase();
     return {
       asksEmpathy: /(emp[aá]tic|empat[ií]a|m[aá]s humano|humana|calm|contener|suave|cercan)/i.test(normalized),
       angryClient: /(cliente\s+enojad|cliente\s+molest|cliente\s+angry|est[aá]\s+enojad|est[aá]\s+molest|cliente\s+molesto)/i.test(normalized),
       asksOrthography: /(ortograf|acentos?|puntuaci[oó]n|corrige|corregir|correcci[oó]n)/i.test(normalized),
-      asksShorter: /(versi[oó]n m[aá]s corta|versi[oó]n corta|m[aá]s corto|mas corto|acorta|acortalo|acort[aá]melo|resum[ií]|resumir|resumen)/i.test(normalized),
+      asksShorter: /(versi[oó]n m[aá]s corta|versi[oó]n corta|m[aá]s corto|m[aá]s breve|\bbreve\b|acorta|acortalo|acort[aá]melo|resum[ií]|resumir|resumen)/i.test(normalized),
       asksFormal: /(formal|profesional|mas profesional|m[aá]s profesional)/i.test(normalized),
       asksFriendly: /(amable|cercan|calid|cordial)/i.test(normalized)
     };
@@ -2716,6 +2735,9 @@ No expliques, no agregues encabezados ni digas "respuesta mejorada".${metaDescri
   getSimpleRewriteInstructionText(userMessage = '') {
     const text = String(userMessage || '').trim();
     if (!text) return '';
+
+    const multiline = this.getMultilineRewriteParts(text);
+    if (multiline) return multiline.instruction;
 
     const colonIndex = text.indexOf(':');
     if (colonIndex >= 0 && colonIndex <= 220) {
@@ -3505,96 +3527,115 @@ Devolvé una respuesta completa, operativa y sin omitir ninguna tarea.`
     };
   }
 
+  getSimpleRewriteFidelityIssues(userMessage = '', assistantText = '') {
+    const source = this.extractExplicitTextTransformPayload(userMessage);
+    const output = String(assistantText || '').trim();
+    if (!source || !output) return ['missing_text'];
+    const fold = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    const plain = value => fold(value.replace(/https?:\/\/[^\s<>"'\x60]+/gi,' '));
+    const from = plain(source), to = plain(output), issues = [];
+    const words = {cero:'0',uno:'1',dos:'2',tres:'3',cuatro:'4',cinco:'5',seis:'6',siete:'7',ocho:'8',nueve:'9',diez:'10',once:'11',doce:'12',trece:'13',catorce:'14',quince:'15',veinte:'20',treinta:'30'};
+    const numeric = value => value.replace(/\b(?:cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|veinte|treinta)\b/g,s=>words[s]);
+    const numbers = value => new Set(numeric(value).match(/\b\d+(?:[.,:/-]\d+)*%?/g)||[]);
+    const oldNumbers = numbers(from), newNumbers = numbers(to);
+    if ([...oldNumbers].some(n=>!newNumbers.has(n))) issues.push('source_number_lost');
+    if ([...newNumbers].some(n=>!oldNumbers.has(n) && !(n==='1' && /\b(?:un|una)\b/.test(from)))) issues.push('unsupported_number');
+    const quantities = value => [...numeric(value).matchAll(/\b(\d+(?:[.,]\d+)?)\s+([\p{L}]{3,})/gu)]
+      .map(m=>[m[1],m[2].slice(0,5)]);
+    const outputQuantities = quantities(to);
+    if (quantities(from).some(([n,unit])=>outputQuantities.some(([other,u])=>u===unit&&other!==n)
+      && !outputQuantities.some(([other,u])=>u===unit&&other===n))) issues.push('source_quantity_changed');
+    const emails = value => value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)||[];
+    if (emails(source).some(e=>!fold(output).includes(fold(e)))) issues.push('source_contact_lost');
+    if (emails(output).some(e=>!fold(source).includes(fold(e)))) issues.push('unsupported_contact');
+    if (!this.rewritePreservesSourceUrls(source,output)) issues.push('url_not_preserved');
+    const sourceUrls = this.extractExactHttpUrls(source);
+    if (this.extractExactHttpUrls(output).some(url=>!sourceUrls.includes(url))) issues.push('unsupported_url');
+
+    const common = new Set('hola gracias saludos buenos buenas estimado estimada el la los las un una unos unas mi mis tu tus su sus nos nosotros usted ustedes para por con sin de del al a en y o que como si cuando antes despues tambien ademas cada ya no hemos te le se soy somos tengo tenemos preparamos revisamos necesitamos queremos puedes puede podes podrias confirmamos importante nota'.split(' '));
+    const names = text => {
+      const clean = text.replace(/https?:\/\/[^\s<>"'\x60]+|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,' ');
+      return [...new Set((clean.match(/[\p{L}\p{M}]+/gu)||[]).filter(token => {
+        if (common.has(fold(token)) || !/^\p{Lu}/u.test(token)) return false;
+        const index = clean.indexOf(token);
+        const atStart = !clean.slice(0,index).trim() || /[.!?\n]\s*[¿¡"'“”(\s]*$/.test(clean.slice(0,index));
+        return !atStart || /^\p{Lu}{2,}$/u.test(token) || /\p{Ll}.*\p{Lu}/u.test(token);
+      }).map(fold))];
+    };
+    const oldNames = names(source), newNames = names(output);
+    const outputWords = new Set(to.match(/[\p{L}\p{M}]+/gu)||[]);
+    if (oldNames.some(n=>!outputWords.has(n))) issues.push('source_name_lost');
+    if (newNames.some(n=>!from.includes(n) && !common.has(n))) issues.push('unsupported_name');
+    const roles = text => ({
+      recipient:text.match(/^Hola[,\s]+([\p{Lu}][\p{L}\p{M}'-]*(?:\s+\p{Lu}[\p{L}\p{M}'-]*)*)[.,!\n]/u)?.[1],
+      sender:text.match(/\b(?:Soy|soy|Mi nombre es|mi nombre es|Te escribe|te escribe)\s+(\p{Lu}[\p{L}\p{M}'-]*(?:\s+\p{Lu}[\p{L}\p{M}'-]*)*)/u)?.[1]
+    });
+    const oldRoles=roles(source),newRoles=roles(output);
+    if (['recipient','sender'].some(role=>oldRoles[role]&&newRoles[role]&&fold(oldRoles[role])!==fold(newRoles[role]))) issues.push('source_role_changed');
+
+    // Local data checks, not a semantic judge. Weak lexical overlap triggers a
+    // conservative source-preserving fallback, never another model call here.
+    const stop = new Set([...common,...'es son fue ser estar esta estan este esta estos estas esto eso hay haber hacer hemos haber nuestro nuestra vuestros lo les me mas muy bien mejor acerca sobre mediante hacia desde ahora gusto favor gustaria podria sera serán seria podra puedo desean deseo forma manera texto mensaje informacion especifica especificas'.split(' ')]);
+    const stems = value => [...new Set((plain(value).replace(/\b(?:necsari|nesecari)([oa]s?)\b/g,'necesari$1')
+      .replace(/\bpajina\b/g,'pagina').replace(/\bcomoo\b/g,'como').match(/[\p{L}]+/gu)||[])
+      .filter(w=>w.length>2&&!stop.has(w)&&!words[w])
+      .map(w=>/^(?:avis|inform|comunic)/.test(w)?'inform':/^(?:prepar|elabor)/.test(w)?'prepar':w.slice(0,5)))];
+    const units = value => value.replace(/https?:\/\/[^\s<>"'\x60]+/gi,' ')
+      .split(/(?:[.!?;]\s+|\n+|,\s+(?!\d))/).filter(s=>s.trim());
+    const outputStems = new Set(stems(output));
+    const sourceUnits = units(source);
+    for (const unit of sourceUnits) {
+      const keys = stems(unit);
+      if (!keys.length) continue;
+      const count = keys.filter(k=>outputStems.has(k)).length;
+      if (count < Math.max(1,Math.ceil(keys.length*0.25))) {issues.push('source_fact_lost');break;}
+    }
+    const questions = source.match(/¿[^?]+\?|[^.!?\n]+\?/g)||[];
+    const answers = output.match(/¿[^?]+\?|[^.!?\n]+\?/g)||[];
+    if (questions.some(q=>{
+      const keys=stems(q);
+      return !answers.some(a=>{const set=new Set(stems(a));return keys.length ? keys.filter(k=>set.has(k)).length>=Math.max(1,Math.ceil(keys.length*.35)) : true;});
+    })) issues.push('source_question_lost');
+    const conditions = /\b(?:si|solo si|siempre que|salvo|excepto|hasta que|antes de|despues de|para poder|necesitamos|necesario|requiere|no se|no podemos)\b/;
+    const conditionalOutput = units(output).filter(u=>conditions.test(fold(u)) || /\b(?:para|con|sin|cuando)\b/.test(fold(u)));
+    if (sourceUnits.filter(u=>conditions.test(fold(u))).some(u=>{
+      const keys=stems(u);
+      return keys.length && !conditionalOutput.some(v=>{const set=new Set(stems(v));return keys.filter(k=>set.has(k)).length>=Math.max(1,Math.ceil(keys.length*.35));});
+    })) issues.push('source_condition_lost');
+    // Keep explicit negation associated with its topic, not a random "no"
+    // elsewhere in the answer.
+    if (sourceUnits.filter(u=>/\b(?:no|nunca|sin)\b/.test(fold(u))).some(u=>{
+      const keys=stems(u);
+      return keys.length && !units(output).some(v=>/\b(?:no|nunca|sin|en lugar de)\b/.test(fold(v))
+        && keys.some(k=>new Set(stems(v)).has(k)));
+    })) issues.push('source_negation_lost');
+
+    const added = [
+      ['unsupported_apology',/\b(?:disculp\w*|lamento|lamentamos|perdon\w*)\b/],
+      ['unsupported_emotion',/\b(?:molesti\w*|enoj\w*|frustra\w*)\b/],
+      ['unsupported_delay',/\b(?:demor\w*|retras\w*|tardan\w*)\b/],
+      ['unsupported_commitment',/\b(?:te voy a|vamos a|nos compromet\w*|garantiz\w*|promet\w*|(?:enviar|compartir|entregar|publicar|contactar|llamar|reembolsar|cancelar)(?:e|emos|a|an))\b/],
+      ['unsupported_completion',/\b(?:ya\s+(?:hemos\s+)?(?:enviado|publicado|cancelado|reembolsado|entregado|resuelto)|hemos\s+(?:reembolsado|cancelado|publicado))\b/]
+    ];
+    const instruction=fold(this.getSimpleRewriteInstructionText(userMessage));
+    for(const [issue,pattern] of added) if(pattern.test(to)&&!pattern.test(from)
+      && !(issue==='unsupported_apology' && /\b(?:pedi|pedir|pide|inclui|incluye|agrega)\b.{0,30}\b(?:disculpas|perdon)\b/.test(instruction))) issues.push(issue);
+    const times = /\b(?:hoy|manana|ayer|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/g;
+    if ((to.match(times)||[]).some(w=>!(from.match(times)||[]).includes(w))) issues.push('unsupported_time');
+    return [...new Set(issues)];
+  }
+
   getSimpleRewriteQualityIssues(userMessage = '', assistantText = '') {
     const sourceText = this.extractExplicitTextTransformPayload(userMessage);
     const outputText = String(assistantText || '').trim();
-    const issues = [];
     if (!sourceText || !outputText) return ['missing_text'];
-
     const localTransform = this.getLocalTextTransformInstruction(userMessage);
-    if (localTransform?.type === 'uppercase' || localTransform?.type === 'lowercase') {
-      const expected = this.applyLocalTextTransform(localTransform);
-      return outputText === expected ? [] : ['incorrect_case_transform'];
-    }
-
-    if (!this.rewritePreservesSourceUrls(sourceText, outputText)) {
-      issues.push('url_not_preserved');
-    }
-
-    const metrics = this.getSimpleRewriteSimilarityMetrics(sourceText, outputText);
-    const normalizedSource = this.normalizeRewriteComparisonText(sourceText);
-    const normalizedOutput = this.normalizeRewriteComparisonText(outputText);
-    const surfaceSource = this.normalizeRewriteSurfaceComparisonText(sourceText);
-    const surfaceOutput = this.normalizeRewriteSurfaceComparisonText(outputText);
-    const profile = this.getSimpleRewriteProfile(userMessage);
-    const instruction = this.getSimpleRewriteInstructionText(userMessage);
-    const explicitlyAsksImprovement = /(mejor|correg|reescrib|reformul|pul|redact|profesional)/i.test(
-      this.normalizeIntentText(instruction)
-    );
-    const outputWithoutUrls = outputText.replace(/https?:\/\/[^\s<>"'`]+/gi, ' URL ');
-
-    const shortSurfaceCorrection = sourceText.length <= 160
-      && normalizedSource === normalizedOutput
-      && surfaceSource !== surfaceOutput;
-
-    if (normalizedSource === normalizedOutput && !shortSurfaceCorrection) {
-      issues.push('normalized_output_identical');
-    } else if (!shortSurfaceCorrection && metrics.similarity >= 0.92) {
-      issues.push('cosmetic_changes_only');
-    } else if (
-      explicitlyAsksImprovement
-      && !profile.asksShorter
-      && sourceText.length >= 80
-      && metrics.similarity >= 0.88
-      && metrics.tokenRetention >= 0.92
-    ) {
-      issues.push('cosmetic_changes_only');
-    } else if (
-      sourceText.length >= 320
-      && metrics.similarity >= 0.84
-      && metrics.tokenRetention >= 0.84
-    ) {
-      issues.push('long_rewrite_too_similar');
-    }
-
-    const obviousErrorPattern = /(?<![\p{L}\p{M}])(?:(?:vhola|comoo|categoris|necsario|necsaria|necsarios|necsarias|nesecario|nesecaria|nesecito|alluden|pajina|pagina|llevare|dejare|dejaria|podriamos|podria|aqui|tambien|ademas|gestion|revision|resolucion|musica|sensacion|creeme|basicamente|organico|querias|version|movil|aportanmdo|halba|moistrarlo|profundicas|aporta[sz]valor|poniedolo)|como estas|si claro|osea|lo mas|forma organiza|en el contesto|en el sentido organico|mas (?:arriba|abajo|claro|facil|fácil|rapido|rápido|piden|solicitado|profesional|natural))(?![\p{L}\p{M}])/iu;
-    const unaccentedSupportFutureMatches = Array.from(outputWithoutUrls.matchAll(/\bse\s+(?:cerrara|abrira|enviara|notificara|confirmara|contactara|continuara|gestionara)\b/gi));
-    const hasUnaccentedSupportFuture = unaccentedSupportFutureMatches.some((match) => {
-      const prefix = outputWithoutUrls.slice(Math.max(0, Number(match.index || 0) - 8), Number(match.index || 0));
-      return !/\bsi\s*$/i.test(prefix);
-    });
-    const brokenConstructionPattern = /\b(?:podr[ií]a|deber[ií]a)\s+sea\b|\blo\s+necsario\b|\blo\s+nesecario\b/i;
-    const unexpectedMixedScriptTokens = this.getUnexpectedMixedScriptTokens(sourceText, outputText);
-    if (obviousErrorPattern.test(outputWithoutUrls)) issues.push('obvious_language_errors');
-    if (hasUnaccentedSupportFuture) issues.push('obvious_language_errors');
-    if (brokenConstructionPattern.test(outputWithoutUrls)) issues.push('broken_grammar');
-    if (unexpectedMixedScriptTokens.length) issues.push('unexpected_mixed_script_token');
-
-    const normalizedVisibleOutput = this.normalizeIntentText(outputWithoutUrls);
-    const repeatedNoProblem = (normalizedVisibleOutput.match(/\bsin problema\b/g) || []).length;
-    if (repeatedNoProblem >= 2) issues.push('clear_repetition');
-
-    const sourceParagraphs = sourceText.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).length;
-    const outputParagraphs = Math.max(
-      outputText.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).length,
-      outputText.split(/\n+/).map((part) => part.trim()).filter(Boolean).length
-    );
-    const sourceSentences = sourceText.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
-    const outputSentences = outputWithoutUrls.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
-    const requiresParagraphing = sourceText.length >= 420 && sourceParagraphs <= 1 && sourceSentences.length >= 3;
-    if (requiresParagraphing && outputParagraphs < 2) issues.push('long_message_not_restructured');
-    if (outputSentences.some((sentence) => sentence.length > 320)) issues.push('sentence_too_long');
-
-    if (!profile.asksShorter && outputText.length < sourceText.length * 0.45) {
-      issues.push('meaningful_content_lost');
-    }
-
-    if ((profile.asksEmpathy || profile.angryClient)
-      && !/(entiendo|lamento|disculp|gracias por tu paciencia|comprendo)/i.test(outputText)) {
-      issues.push('requested_empathy_missing');
-    }
-
-    return Array.from(new Set(issues));
+    if (localTransform) return outputText === this.applyLocalTextTransform(localTransform) ? [] : ['incorrect_case_transform'];
+    const issues = this.getSimpleRewriteFidelityIssues(userMessage,outputText);
+    if (this.getUnexpectedMixedScriptTokens(sourceText,outputText).length) issues.push('unexpected_mixed_script_token');
+    // Similarity is diagnostic, not a demand to rewrite facts artificially.
+    // Empathy has no mandatory words, apology, incident or commitment.
+    return [...new Set(issues)];
   }
 
   evaluateSimpleRewriteResult(userMessage = '', assistantText = '') {
@@ -3624,8 +3665,8 @@ Devolvé una respuesta completa, operativa y sin omitir ninguna tarea.`
     if (!this.rewritePreservesSourceUrls(sourceText, outputText)) return false;
     if (this.getUnexpectedMixedScriptTokens(sourceText, outputText).length) return false;
 
-    const profile = this.getSimpleRewriteProfile(userMessage);
-    if (!profile.asksShorter && outputText.length < sourceText.length * 0.45) return false;
+    if (this.getSimpleRewriteFidelityIssues(userMessage,outputText).length) return false;
+
     // Quality issues can justify one retry, but they must not erase an otherwise
     // intact answer. Recovery rejects only empty/corrupt/data-losing output.
     return true;
@@ -3667,7 +3708,7 @@ Devolvé una respuesta completa, operativa y sin omitir ninguna tarea.`
     }
 
     if (profile.asksEmpathy || profile.angryClient) {
-      rules.push('Usá empatía, bajá la fricción y transmití control del siguiente paso.');
+      rules.push('Usá un tono empático sin asumir molestias, demoras, disculpas, gestiones ni promesas que no consten en el borrador.');
     }
 
     if (profile.asksFormal) {
@@ -3678,7 +3719,7 @@ Devolvé una respuesta completa, operativa y sin omitir ninguna tarea.`
       rules.push('Usá un tono cercano y amable.');
     }
 
-    if (profile.asksShorter || String(sourceText || '').length > 800) {
+    if (profile.asksShorter) {
       rules.push('Priorizá síntesis sin perder información importante.');
     }
 
@@ -3722,7 +3763,7 @@ Devolvé una respuesta completa, operativa y sin omitir ninguna tarea.`
         {
           role: 'system',
           content: `Respondé SOLO JSON válido con esta forma exacta: {"response":"texto final"}.
-Actuá como editor profesional. Dentro de "response", reescribí el texto completo desde su significado: corregí ortografía, tildes, gramática y puntuación; mejorá claridad, fluidez y tono; eliminá repeticiones; y conservá todos los hechos, nombres y condiciones. No te limites a cambiar saltos de línea. No agregues análisis, títulos, explicaciones ni información nueva.
+Editá redacción y tono sin cambiar hechos, nombres, cantidades, enlaces, condiciones, negaciones, pedidos, preguntas ni roles. Estilo y brevedad no autorizan omisiones ni invenciones. Si no hay mejora segura, conservá el borrador. Entregá sólo el texto final.
 ${extraRules}`
         },
         {
@@ -3888,7 +3929,7 @@ REGLAS
         {
           role: 'system',
           content: `Respondé SOLO JSON válido con esta forma exacta: {"response":"texto final"}.
-La salida anterior fue rechazada (${rejectedReasons}). Reconstruí el mensaje desde cero como editor profesional: corregí todos los errores, reordená las ideas, eliminá repeticiones y mejorá claridad, fluidez y tono sin perder hechos, nombres ni condiciones. Dentro de "response" incluí únicamente la versión final lista para copiar, sin análisis, títulos ni información inventada.
+La salida anterior no fue fiel (${rejectedReasons}). Editá claridad y tono conservando datos, nombres, cantidades, condiciones, negaciones, solicitudes, preguntas y roles. No inventes información. Si no hay mejora segura, conservá el original. Entregá sólo el texto final.
 ${sourceUrls.length ? `- Conservá exactamente estas URLs: ${sourceUrls.join(' | ')}` : ''}
 ${extraRules}`
         },
@@ -11314,98 +11355,14 @@ Se trata de una gestión que excede nuestro alcance por motivos de seguridad.`;
   }
 
   buildSimpleRewriteLocalFallback(userMessage = '', assistantText = '') {
-    const originalRequest = String(userMessage || '').trim();
-    const sourceText = this.extractExplicitTextTransformPayload(originalRequest);
-    if (!sourceText) return '';
-
-    const profile = this.getSimpleRewriteProfile(originalRequest);
-    const normalizedRequest = originalRequest.toLowerCase();
-    const compactSource = this.applyLocalSpanishSurfaceCorrections(sourceText.replace(/\s+/g, ' ').trim());
-    if (!compactSource) return '';
-
-    const pendingClientReply = /sigo\s+esperando(?:\s+tu)?\s+respuesta/i.test(compactSource)
-      && /no\s+podemos\s+continuar/i.test(compactSource)
-      && /cerrar[aá]\s+el\s+caso/i.test(compactSource)
-      && /abrir[aá]\s+otro/i.test(compactSource);
-    if (pendingClientReply) {
-      const recipientName = compactSource.match(/^Hola,?\s+([\p{L}\p{M}'-]{2,40})[,.]/iu)?.[1] || '';
-      const greeting = recipientName ? `Hola, ${recipientName}.` : 'Hola.';
-      return `${greeting}\n\nSigo esperando tu respuesta para poder continuar con la gestión. Si no recibimos respuesta, cerraremos el caso. Cuando vuelvas a contactarnos, abriremos uno nuevo para retomarlo.`;
-    }
-
-    if (/(versi[oó]n m[aá]s corta|versi[oó]n corta|m[aá]s corto|mas corto|acorta|acortalo|acort[aá]melo|resum[ií]|resumir|resumen)/i.test(normalizedRequest)) {
-      const normalizedSentences = compactSource
-        .split(/(?<=[.!?])\s+/)
-        .map((sentence) => sentence.trim())
-        .filter(Boolean);
-      const shortened = (normalizedSentences.slice(0, 2).join(' ') || compactSource).trim();
-      if (shortened.length <= 280) {
-        return shortened;
-      }
-      return `${shortened.slice(0, 277).trim()}...`;
-    }
-
-    if (profile.asksEmpathy || profile.angryClient) {
-      const nameMatch = compactSource.match(/mi nombre es\s+([a-záéíóúñ ]{2,40})/i);
-      const resolvedName = nameMatch?.[1]
-        ? nameMatch[1].trim().replace(/\s+/g, ' ')
-        : '';
-      const greetingLine = 'Hola.';
-      const introLine = resolvedName
-        ? `Te escribe ${resolvedName}, del equipo de soporte UEBEA.`
-        : 'Te escribe el equipo de soporte UEBEA.';
-
-      const workingOnPage = /trabajamos en la nueva p[aá]gina|nueva p[aá]gina de servicios/i.test(compactSource)
-        ? 'Como te comenté, estamos trabajando en la nueva página de servicios y queremos dejártela bien antes de publicarla.'
-        : 'Estamos trabajando para resolverlo de la mejor manera y avanzar cuanto antes.';
-
-      const advanceLine = /hoy.*avances?/i.test(compactSource)
-        ? 'Hoy mismo te voy a compartir los avances para que puedas revisarlos y confirmarnos si está todo correcto antes de hacerla pública.'
-        : 'Te voy a compartir los avances para que puedas revisarlos y así avanzar con el siguiente paso cuanto antes.';
-
-      const closingLine = 'Entiendo tu molestia y te pido disculpas por la demora. Gracias por tu paciencia; seguimos atentos para dejarlo resuelto lo antes posible.';
-
-      return [greetingLine, introLine, closingLine, workingOnPage, advanceLine]
-        .filter(Boolean)
-        .join('\n\n')
-        .trim();
-    }
-
-    if (sourceText.length >= 280) {
-      const longRewrite = this.buildLongSimpleRewriteLocalFallback(sourceText, originalRequest);
-      if (longRewrite) return longRewrite;
-    }
-
-    let cleaned = compactSource
-      .replace(/^hacemos\b/i, 'Creamos')
-      .replace(/^somos\b/i, 'Somos')
-      .replace(/^se agregaron\b/i, 'Se incorporaron');
-
-    cleaned = this.applyLocalSpanishSurfaceCorrections(cleaned);
-    cleaned = cleaned
-      .replace(/\s+y tambi[eé]n\s+(?=(?:revisamos|corregimos|actualizamos|agregamos|incorporamos)\b)/gi, '. También ')
-      .replace(/\s+pero falta una revisi[oó]n final\b/gi, '. Queda pendiente una revisión final');
-    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-    if (!/[.!?]$/.test(cleaned)) {
-      cleaned += '.';
-    }
-
-    if (this.normalizeRewriteComparisonText(cleaned) === this.normalizeRewriteComparisonText(sourceText)) {
-      const greetingMatch = cleaned.match(/^(Hola,\s*[^.!?]+[.!?])\s+([\s\S]+)$/i);
-      if (greetingMatch) {
-        const body = String(greetingMatch[2] || '')
-          .replace(/^Ya\s+/i, 'ya ')
-          .replace(/^([A-ZÁÉÍÓÚÑ])/, (letter) => letter.toLocaleLowerCase('es-ES'));
-        cleaned = `${greetingMatch[1]}\n\nTe confirmamos que ${body}`;
-      } else {
-        cleaned = cleaned
-          .replace(/,\s+luego\b/gi, '. Luego')
-          .replace(/\bavisamos\b/gi, 'informamos')
-          .replace(/\bdecimos\b/gi, 'comunicamos');
-      }
-    }
-
-    return cleaned.trim();
+    const source = this.extractExplicitTextTransformPayload(userMessage);
+    if (!source) return '';
+    const localTransform = this.getLocalTextTransformInstruction(userMessage);
+    if (localTransform) return this.applyLocalTextTransform(localTransform);
+    // An emergency editor is not a generative support agent. Keep every
+    // paragraph, question, condition and data item; never truncate to "summarize".
+    // Do not use the older domain-specific surface substitutions here.
+    return source.trim();
   }
 
   applyLocalSpanishSurfaceCorrections(text = '') {
